@@ -6,6 +6,11 @@ on:
     - cron: '0 * * * *'
   # Allows manual triggers from the GitHub web UI
   workflow_dispatch:
+    inputs:
+      weekly_digest:
+        description: 'Send Weekly Digest Email'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -33,7 +38,12 @@ jobs:
           SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
           SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
           RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
-        run: python landwatch_monitor.py
+        run: |
+          if [ "${{ inputs.weekly_digest }}" = "true" ]; then
+            python landwatch_monitor.py --weekly-digest
+          else
+            python landwatch_monitor.py
+          fi
 
       - name: Save Updated Memory File
         uses: stefanzweifel/git-auto-commit-action@v5

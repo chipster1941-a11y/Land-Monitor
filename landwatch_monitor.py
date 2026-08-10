@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import smtplib
 from email.mime.text import MIMEText
@@ -21,9 +22,10 @@ COUNTIES = [
     "dunn-county",
 ]
 
-# Filtering Options (Set to None if you don't want a limit)
-MIN_ACRES = 10         # e.g., only listings with 10+ acres (or None)
-MAX_PRICE = 1000000    # e.g., max price of $1,000,000 (or None)
+# Filtering Options
+MIN_ACRES = None       # e.g., 10 (or None for no limit)
+MAX_PRICE = None       # e.g., 1000000 (or None for no limit)
+KEYWORD_HIGHLIGHTS = ["tillable", "pasture", "barn", "waterfront", "creek", "hunting", "timber"]
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -39,6 +41,11 @@ MEMORY_FILE = "seen_farms.txt"
 
 def send_rich_email_alert(title, link, county, source_site):
     county_name = county.replace('-', ' ').title()
+    
+    # Check for keyword highlights in title
+    matched_keywords = [kw for kw in KEYWORD_HIGHLIGHTS if kw in title.lower()]
+    keyword_badge = f" • Keywords: {', '.join(matched_keywords)}" if matched_keywords else ""
+
     subject = f"🚨 New {source_site} Listing: {county_name}, WI"
     
     html_body = f"""
@@ -126,7 +133,7 @@ def send_rich_email_alert(title, link, county, source_site):
                     <span class="badge badge-county">{county_name}, WI</span>
                 </div>
                 <div class="title">
-                    <strong>Listing:</strong> {title}
+                    <strong>Listing:</strong> {title}{keyword_badge}
                 </div>
                 <div class="button-container">
                     <a href="{link}" class="btn" target="_blank">View Listing Details ➔</a>
@@ -155,6 +162,43 @@ def send_rich_email_alert(title, link, county, source_site):
         print(f"  📧 Rich email notification sent for: {title}")
     except Exception as e:
         print(f"  ⚠️ Failed to send email: {e}")
+
+
+def send_weekly_digest(seen_links):
+    subject = f"📊 Weekly Farmland Monitor Summary Digest ({len(seen_links)} Total Cataloged)"
+    
+    links_list = "".join([f"<li><a href='{link}'>{link}</a></li>" for link in list(seen_links)[:50]])
+    
+    html_body = f"""
+    <!DOCTYPE html>
+    <html>
+    <body style="font-family: Arial, sans-serif; padding: 20px;">
+        <h2>🌾 Weekly Farmland Digest Summary</h2>
+        <p>Your automated monitor is actively watching Barron, Polk, Washburn, and Dunn counties in Wisconsin.</p>
+        <p><strong>Total Cataloged Properties in Memory:</strong> {len(seen_links)}</p>
+        <h3>Recent Tracked Property Links:</h3>
+        <ul>{links_list}</ul>
+        <hr>
+        <p style="font-size: 12px; color: #777;">Farmland Monitor Weekly Digest</p>
+    </body>
+    </html>
+    """
+
+    msg = MIMEMultipart('alternative')
+    msg['From'] = SENDER_EMAIL
+    msg['To'] = RECIPIENT_EMAIL
+    msg['Subject'] = subject
+    msg.attach(MIMEText(html_body, 'html'))
+
+    try:
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(SENDER_EMAIL, SENDER_PASSWORD)
+        server.sendmail(SENDER_EMAIL, RECIPIENT_EMAIL, msg.as_string())
+        server.quit()
+        print(f"  📧 Weekly digest sent successfully!")
+    except Exception as e:
+        print(f"  ⚠️ Failed to send weekly digest: {e}")
 
 
 # ==========================================
@@ -305,15 +349,61 @@ def check_land_com_for_county(county_slug, seen_properties):
         print(f"  No new Land.com listings in {county_name}.")
 
 
+def check_whitetail_properties(county_slug, seen_properties):
+    county_name = county_slug.replace('-', ' ').title()
+    county_raw = county_slug.split('-')[0]
+    url = f"https://www.whitetailproperties.com/properties/wisconsin/{county_slug}"
+    print(f"🔍 Searching Whitetail Properties in [{county_name}]...")
+
+    try:
+        response = requests.get(url, headers=HEADERS, impersonate="chrome", timeout=15)
+        if response.status_code != 200:
+            print(f"  No direct page or status {response.status_code} for Whitetail Properties in {county_name}.")
+            return
+    except Exception as e:
+        print(f"⚠️ Connection error for Whitetail Properties ({county_slug}): {e}")
+        return
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    all_links = soup.find_all("a", href=True)
+    new_found_count = 0
+
+    for a_tag in all_links:
+        href = a_tag["href"]
+        if "/properties/" in href and "wisconsin" in href.lower():
+            full_url = href if href.startswith("http") else f"https://www.whitetailproperties.com{href}"
+            title = a_tag.text.strip() or f"Whitetail Properties Listing in {county_name}"
+            title = " ".join(title.split())
+
+            if full_url not in seen_properties:
+                print(f"\n🚨 NEW WHITETAIL PROPERTIES LISTING IN {county_slug.upper()}!")
+                send_rich_email_alert(title, full_url, county_slug, "Whitetail Properties")
+                save_seen_property(full_url)
+                seen_properties.add(full_url)
+                new_found_count += 1
+
+    if new_found_count == 0:
+        print(f"  No new Whitetail Properties listings in {county_name}.")
+
+
 def main():
     seen_properties = load_seen_properties()
     
+    # Check if triggered for weekly digest summary
+    if len(sys.argv) > 1 and sys.argv[1] == "--weekly-digest":
+        print("📊 Running Weekly Digest Mode...")
+        send_weekly_digest(seen_properties)
+        return
+
+    # Standard Scraper Loop
     for county in COUNTIES:
         check_landwatch_for_county(county, seen_properties)
         time.sleep(2)
         check_landandfarm_for_county(county, seen_properties)
         time.sleep(2)
         check_land_com_for_county(county, seen_properties)
+        time.sleep(2)
+        check_whitetail_properties(county, seen_properties)
         time.sleep(2)
         
     print("\nCheck complete!")
