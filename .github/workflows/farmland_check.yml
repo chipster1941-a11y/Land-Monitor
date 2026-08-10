@@ -36,9 +36,7 @@ jobs:
         run: python landwatch_monitor.py
 
       - name: Save Updated Memory File
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add seen_farms.txt
-          git commit -m "Update seen farms memory [skip ci]" || echo "No changes to commit"
-          git push
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Update seen farms memory [skip ci]"
+          file_pattern: 'seen_farms.txt'
