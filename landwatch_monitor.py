@@ -82,6 +82,7 @@ def save_seen_property(link):
 
 def check_landwatch_for_county(county_slug, seen_properties):
     county_name = county_slug.replace('-', ' ').title()
+    county_raw = county_slug.split('-')[0]  # e.g., 'barron', 'polk'
     url = f"https://www.landwatch.com/wisconsin-land-for-sale/{county_slug}/farms-ranches"
     print(f"🔍 Searching LandWatch in [{county_name}]...")
 
@@ -105,12 +106,14 @@ def check_landwatch_for_county(county_slug, seen_properties):
         is_property_link = any(pattern in href for pattern in ["/pid/", "/land-for-sale/", "/farms-ranches/"])
         is_wisconsin = "wisconsin" in href.lower() or "wi" in href.lower()
         is_not_search_page = not href.endswith("/farms-ranches") and not href.endswith("/land-for-sale")
+        
+        # Verify the listing URL or title actually belongs to the target county
+        title = a_tag.text.strip() or f"Farmland Listing in {county_name}"
+        title = " ".join(title.split())
+        is_correct_county = county_raw in href.lower() or county_raw in title.lower()
 
-        if is_property_link and is_wisconsin and is_not_search_page:
+        if is_property_link and is_wisconsin and is_not_search_page and is_correct_county:
             full_url = href if href.startswith("http") else f"https://www.landwatch.com{href}"
-            
-            title = a_tag.text.strip() or f"Farmland Listing in {county_name}"
-            title = " ".join(title.split())
 
             if full_url not in seen_properties:
                 print(f"\n🚨 NEW LANDWATCH LISTING IN {county_slug.upper()}!")
@@ -128,6 +131,7 @@ def check_landwatch_for_county(county_slug, seen_properties):
 
 def check_landandfarm_for_county(county_slug, seen_properties):
     county_name = county_slug.replace('-', ' ').title()
+    county_raw = county_slug.split('-')[0]  # e.g., 'barron', 'polk'
     url = f"https://www.landandfarm.com/wisconsin-land-for-sale/{county_slug}/farms-ranches/"
     print(f"🔍 Searching LandAndFarm in [{county_name}]...")
 
@@ -151,11 +155,13 @@ def check_landandfarm_for_county(county_slug, seen_properties):
         is_property_link = any(pattern in href for pattern in ["/property/", "/pid/"])
         is_wisconsin = "wisconsin" in href.lower() or "wi" in href.lower()
 
-        if is_property_link and is_wisconsin:
+        # Verify the listing URL or title actually belongs to the target county
+        title = a_tag.text.strip() or f"LandAndFarm Listing in {county_name}"
+        title = " ".join(title.split())
+        is_correct_county = county_raw in href.lower() or county_raw in title.lower()
+
+        if is_property_link and is_wisconsin and is_correct_county:
             full_url = href if href.startswith("http") else f"https://www.landandfarm.com{href}"
-            
-            title = a_tag.text.strip() or f"LandAndFarm Listing in {county_name}"
-            title = " ".join(title.split())
 
             if full_url not in seen_properties:
                 print(f"\n🚨 NEW LANDANDFARM LISTING IN {county_slug.upper()}!")
