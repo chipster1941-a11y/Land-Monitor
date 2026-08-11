@@ -14,9 +14,9 @@ from curl_cffi import requests
 # ==========================================
 # CONFIGURATION & CONSTANTS
 # ==========================================
-SENDER_EMAIL = os.getenv("SENDER_EMAIL", "your_email@gmail.com")
-SENDER_PASSWORD = os.getenv("SENDER_PASSWORD", "your_app_password")
-RECIPIENT_EMAIL = os.getenv("RECIPIENT_EMAIL", "recipient_email@gmail.com")
+SENDER_EMAIL = os.getenv("SENDER_EMAIL", "chipster1941@gmail.com")
+SENDER_PASSWORD = os.getenv("SENDER_PASSWORD", "ygyk ijmw qowl qpad")
+RECIPIENT_EMAIL = os.getenv("RECIPIENT_EMAIL", "kwolf100@hotmail.com")
 
 SEEN_FILE = "seen_golf_carts.txt"
 
