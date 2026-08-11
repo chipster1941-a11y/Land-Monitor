@@ -20,15 +20,15 @@ RECIPIENT_EMAIL = os.getenv("RECIPIENT_EMAIL", "kwolf100@hotmail.com")
 
 SEEN_FILE = "seen_golf_carts.txt"
 
-# Craigslist Regional RSS Feeds for Florida (Tampa Bay to Sarasota/Bradenton)
+# Updated OpenRSS feeds that bypass Craigslist's block
 CRAIGSLIST_FEEDS = [
     {
         "region": "Tampa Bay Area", 
-        "url": "https://tampa.craigslist.org/search/sss?format=rss&query=golf+cart"
+        "url": "https://openrss.org/tampa.craigslist.org/search/sss?query=golf+cart"
     },
     {
         "region": "Sarasota / Bradenton", 
-        "url": "https://sarasota.craigslist.org/search/sss?format=rss&query=golf+cart"
+        "url": "https://openrss.org/sarasota.craigslist.org/search/sss?query=golf+cart"
     }
 ]
 
