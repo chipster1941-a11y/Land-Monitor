@@ -115,7 +115,6 @@ def send_weekly_digest(seen_properties):
 # ==========================================
 def check_landwatch_for_county(county_slug, seen_properties):
     county_name = county_slug.replace('-', ' ').title()
-    # Filter for 10+ acres added to URL path
     url = f"https://www.landwatch.com/wisconsin-land-for-sale/{county_slug}/acres-10-over"
     print(f"🔍 Searching LandWatch (10+ Acres) in [{county_name}]...")
 
@@ -150,8 +149,8 @@ def check_landwatch_for_county(county_slug, seen_properties):
 
 def check_landandfarm_for_county(county_slug, seen_properties):
     county_name = county_slug.replace('-', ' ').title()
-    # Filter for 10+ acres added to search path
-    url = f"https://www.landandfarm.com/search/wisconsin/{county_slug}-land-for-sale/10-plus-acres/"
+    # Corrected URL path format for LandAndFarm acreage search
+    url = f"https://www.landandfarm.com/search/wisconsin/{county_slug}-land-for-sale/acres-10-over/"
     print(f"🔍 Searching LandAndFarm (10+ Acres) in [{county_name}]...")
 
     try:
@@ -205,7 +204,6 @@ def check_whitetail_properties(county_slug, seen_properties):
         href = a_tag["href"]
         full_url = href if href.startswith("http") else f"https://www.whitetailproperties.com{href}"
         
-        # Check text title for acreage reference if present
         title = a_tag.text.strip() or f"Whitetail Properties Listing in {county_name}"
         title = " ".join(title.split())
 
