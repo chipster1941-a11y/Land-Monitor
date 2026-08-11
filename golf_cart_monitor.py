@@ -20,11 +20,16 @@ RECIPIENT_EMAIL = os.getenv("RECIPIENT_EMAIL", "recipient_email@gmail.com")
 
 SEEN_FILE = "seen_golf_carts.txt"
 
-# Craigslist Regional RSS Feeds for Golf Carts
+# Craigslist Regional RSS Feeds for Florida (Tampa Bay to Sarasota/Bradenton)
 CRAIGSLIST_FEEDS = [
-    {"region": "Eau Claire", "url": "https://eauclaire.craigslist.org/search/sss?format=rss&query=golf+cart"},
-    {"region": "Duluth / Superior", "url": "https://duluth.craigslist.org/search/sss?format=rss&query=golf+cart"},
-    {"region": "Minneapolis / St. Paul", "url": "https://minneapolis.craigslist.org/search/sss?format=rss&query=golf+cart"}
+    {
+        "region": "Tampa Bay Area", 
+        "url": "https://tampa.craigslist.org/search/sss?format=rss&query=golf+cart"
+    },
+    {
+        "region": "Sarasota / Bradenton", 
+        "url": "https://sarasota.craigslist.org/search/sss?format=rss&query=golf+cart"
+    }
 ]
 
 HEADERS = {
@@ -48,20 +53,20 @@ def save_seen_item(item_url):
 # EMAIL NOTIFICATION FUNCTIONS
 # ==========================================
 def send_rich_email_alert(title, url, region, source):
-    subject = f"🛒 GOLF CART DEAL FOUND: {title[:50]}"
+    subject = f"🛒 GOLF CART DEAL FOUND ({region}): {title[:40]}"
     
     html_body = f"""
     <html>
       <body style="font-family: Arial, sans-serif; background-color: #fef8f0; padding: 20px;">
         <div style="max-width: 600px; margin: 0 auto; background: #ffffff; padding: 25px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
           <span style="background-color: #e65100; color: white; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold;">{source} ({region})</span>
-          <h2 style="color: #bf360c; margin-top: 15px;">Used Golf Cart Listing</h2>
+          <h2 style="color: #bf360c; margin-top: 15px;">Florida Golf Cart Listing</h2>
           <p style="font-size: 18px; color: #333333;"><strong>{title}</strong></p>
           <div style="margin-top: 20px;">
-            <a href="{url}" style="background-color: #e65100; color: white; padding: 12px 20px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold;">View Golf Cart Listing &rarr;</a>
+            <a href="{url}" style="background-color: #e65100; color: white; padding: 12px 20px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold;">View Listing Details &rarr;</a>
           </div>
           <hr style="margin-top: 30px; border: None; border-top: 1px solid #eeeeee;">
-          <p style="font-size: 12px; color: #888888;">Automated alert from Golf Cart Finder System.</p>
+          <p style="font-size: 12px; color: #888888;">Automated alert from Golf Cart Finder System (Florida Region).</p>
         </div>
       </body>
     </html>
@@ -85,7 +90,7 @@ def send_rich_email_alert(title, url, region, source):
 # CRAIGSLIST RSS PARSER
 # ==========================================
 def check_craigslist_feeds(seen_items):
-    print("🔍 Checking Craigslist RSS feeds for Golf Carts...")
+    print("🔍 Checking Florida Craigslist RSS feeds for Golf Carts...")
     
     for feed_info in CRAIGSLIST_FEEDS:
         region = feed_info["region"]
@@ -99,7 +104,6 @@ def check_craigslist_feeds(seen_items):
                 continue
 
             root = ET.fromstring(response.content)
-            # RSS namespace handling
             items = root.findall(".//{http://purl.org/rss/1.0/}item") or root.findall(".//item")
             
             new_found = 0
@@ -160,14 +164,13 @@ def check_nextdoor_emails(seen_items):
                     else:
                         body = msg.get_payload(decode=True).decode("utf-8", errors="ignore")
 
-                    # Check if email contains golf cart terms
                     if "golf cart" in body.lower():
                         links = re.findall(r'https://nextdoor\.com/for_sale_and_free/[^"\s\'>]+', body)
                         for raw_url in links:
                             clean_url = raw_url.split("?")[0]
                             if clean_url not in seen_items:
                                 print(f"\n🚨 NEW NEXTDOOR GOLF CART FOUND VIA EMAIL!")
-                                send_rich_email_alert("Nextdoor Golf Cart Listing", clean_url, "Local Area", "Nextdoor")
+                                send_rich_email_alert("Nextdoor Golf Cart Listing", clean_url, "Florida Area", "Nextdoor")
                                 save_seen_item(clean_url)
                                 seen_items.add(clean_url)
                                 new_found_count += 1
@@ -186,7 +189,7 @@ def check_nextdoor_emails(seen_items):
 # ==========================================
 def main():
     seen_items = load_seen_items()
-    print("🚀 Starting Used Golf Cart Monitor check...")
+    print("🚀 Starting Florida Golf Cart Monitor check...")
     
     check_craigslist_feeds(seen_items)
     check_nextdoor_emails(seen_items)
