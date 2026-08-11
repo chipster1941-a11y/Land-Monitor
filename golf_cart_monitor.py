@@ -8,6 +8,7 @@ import email
 from email.header import decode_header
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from bs4 import BeautifulSoup
 from curl_cffi import requests
 
 # ==========================================
@@ -19,15 +20,15 @@ RECIPIENT_EMAIL = os.getenv("RECIPIENT_EMAIL", "recipient_email@gmail.com")
 
 SEEN_FILE = "seen_golf_carts.txt"
 
-# Craigslist Regional Feeds converted via RSS2JSON API (bypasses 503 blocks)
-CRAIGSLIST_FEEDS = [
+# Direct search URLs for Florida Craigslist regions
+CRAIGSLIST_SEARCHES = [
     {
         "region": "Tampa Bay Area", 
-        "rss_url": "https://tampa.craigslist.org/search/sss?format=rss&query=golf+cart"
+        "url": "https://tampa.craigslist.org/search/sss?query=golf+cart"
     },
     {
         "region": "Sarasota / Bradenton", 
-        "rss_url": "https://sarasota.craigslist.org/search/sss?format=rss&query=golf+cart"
+        "url": "https://sarasota.craigslist.org/search/sss?query=golf+cart"
     }
 ]
 
@@ -86,57 +87,88 @@ def send_rich_email_alert(title, url, region, source):
         print(f"  ❌ Failed to send email: {e}")
 
 # ==========================================
-# CRAIGSLIST VIA RSS2JSON PROXY PARSER
+# CRAIGSLIST PROXY SCRAPER (ALLORIGINS + JINA FALLBACK)
 # ==========================================
-def check_craigslist_rss(seen_items):
-    print("🔍 Checking Florida Craigslist feeds via RSS2JSON proxy...")
+def fetch_craigslist_html(target_url):
+    """Fetches Craigslist page content using proxy proxies to bypass Cloudflare/IP blocks."""
+    # Method 1: AllOrigins Proxy
+    proxy_url = f"https://api.allorigins.win/get?url={requests.utils.quote(target_url)}"
+    try:
+        resp = requests.get(proxy_url, headers=HEADERS, timeout=15)
+        if resp.status_code == 200:
+            data = resp.json()
+            html = data.get("contents", "")
+            if len(html) > 1000:
+                return html
+    except Exception as e:
+        print(f"    Primary proxy attempt failed: {e}")
+
+    # Method 2: Jina Reader Proxy (Fallback)
+    jina_url = f"https://r.jina.ai/{target_url}"
+    try:
+        resp = requests.get(jina_url, headers=HEADERS, timeout=15)
+        if resp.status_code == 200 and len(resp.text) > 500:
+            return resp.text
+    except Exception as e:
+        print(f"    Fallback proxy attempt failed: {e}")
+
+    return None
+
+def check_craigslist(seen_items):
+    print("🔍 Checking Florida Craigslist listings via proxy gateway...")
     
-    for feed_info in CRAIGSLIST_FEEDS:
-        region = feed_info["region"]
-        rss_url = feed_info["rss_url"]
+    for search_info in CRAIGSLIST_SEARCHES:
+        region = search_info["region"]
+        target_url = search_info["url"]
+        print(f"  Fetching [{region}]...")
         
-        # Construct proxy request to convert RSS XML to JSON
-        api_url = f"https://api.rss2json.com/v1/api.json?rss_url={requests.utils.quote(rss_url)}"
-        print(f"  Fetching feed for [{region}]...")
-        
-        try:
-            response = requests.get(api_url, headers=HEADERS, timeout=15)
-            if response.status_code != 200:
-                print(f"    Status code {response.status_code} for {region}")
-                continue
+        content = fetch_craigslist_html(target_url)
+        if not content:
+            print(f"    ⚠️ Could not fetch listings for {region}.")
+            continue
 
-            data = response.json()
-            if data.get("status") != "ok":
-                print(f"    RSS2JSON error for {region}: {data.get('message', 'Unknown error')}")
-                continue
+        new_found = 0
 
-            items = data.get("items", [])
-            new_found = 0
+        # Parse either standard HTML or Markdown returned by Jina
+        if "<a " in content or "<html" in content.lower():
+            soup = BeautifulSoup(content, "html.parser")
+            listing_links = soup.find_all("a", href=re.compile(r"/(sno|sss|spo|bar|msg|rvs)/d/", re.I))
             
-            for item in items:
-                title = item.get("title", "").strip()
-                link = item.get("link", "").strip()
-                
-                if not link or not title:
+            for a_tag in listing_links:
+                href = a_tag.get("href", "")
+                if not href:
                     continue
-                    
-                clean_url = link.split("?")[0]
                 
-                if clean_url not in seen_items:
+                domain = "tampa" if "tampa" in region.lower() else "sarasota"
+                full_url = href if href.startswith("http") else f"https://{domain}.craigslist.org{href}"
+                clean_url = full_url.split("?")[0]
+                
+                title = a_tag.text.strip() or f"Golf Cart Listing in {region}"
+                title = " ".join(title.split())
+                
+                if clean_url not in seen_items and len(title) > 3:
                     print(f"\n🚨 NEW CRAIGSLIST GOLF CART FOUND IN {region.upper()}!")
                     send_rich_email_alert(title, clean_url, region, "Craigslist")
                     save_seen_item(clean_url)
                     seen_items.add(clean_url)
                     new_found += 1
-            
-            if new_found == 0:
-                print(f"    No new listings found in {region}.")
+        else:
+            # Markdown link parsing fallback
+            matches = re.findall(r'\[(.*?)\]\((https://[a-z]+\.craigslist\.org/[^\s\)]+)\)', content)
+            for title, link in matches:
+                clean_url = link.split("?")[0]
+                if "golf" in title.lower() or "cart" in title.lower() or "club" in title.lower():
+                    if clean_url not in seen_items:
+                        print(f"\n🚨 NEW CRAIGSLIST GOLF CART FOUND IN {region.upper()}!")
+                        send_rich_email_alert(title, clean_url, region, "Craigslist")
+                        save_seen_item(clean_url)
+                        seen_items.add(clean_url)
+                        new_found += 1
 
-            # Polite delay between regional calls
-            time.sleep(2)
+        if new_found == 0:
+            print(f"    No new listings found in {region}.")
 
-        except Exception as e:
-            print(f"⚠️ Error checking Craigslist for {region}: {e}")
+        time.sleep(2)
 
 # ==========================================
 # NEXTDOOR EMAIL IMAP PARSER
@@ -199,7 +231,7 @@ def main():
     seen_items = load_seen_items()
     print("🚀 Starting Florida Golf Cart Monitor check...")
     
-    check_craigslist_rss(seen_items)
+    check_craigslist(seen_items)
     check_nextdoor_emails(seen_items)
 
     print("\n✅ Golf cart monitor execution completed successfully.")
