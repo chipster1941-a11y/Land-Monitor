@@ -5,7 +5,6 @@ import re
 import smtplib
 import imaplib
 import email
-import xml.etree.ElementTree as ET
 from email.header import decode_header
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -14,26 +13,26 @@ from curl_cffi import requests
 # ==========================================
 # CONFIGURATION & CONSTANTS
 # ==========================================
-SENDER_EMAIL = os.getenv("SENDER_EMAIL", "chipster1941@gmail.com")
-SENDER_PASSWORD = os.getenv("SENDER_PASSWORD", "ygyk ijmw qowl qpad")
-RECIPIENT_EMAIL = os.getenv("RECIPIENT_EMAIL", "kwolf100@hotmail.com")
+SENDER_EMAIL = os.getenv("SENDER_EMAIL", "your_email@gmail.com")
+SENDER_PASSWORD = os.getenv("SENDER_PASSWORD", "your_app_password")
+RECIPIENT_EMAIL = os.getenv("RECIPIENT_EMAIL", "recipient_email@gmail.com")
 
 SEEN_FILE = "seen_golf_carts.txt"
 
-# Updated OpenRSS feeds that bypass Craigslist's block
+# Craigslist Regional Feeds converted via RSS2JSON API (bypasses 503 blocks)
 CRAIGSLIST_FEEDS = [
     {
         "region": "Tampa Bay Area", 
-        "url": "https://openrss.org/tampa.craigslist.org/search/sss?query=golf+cart"
+        "rss_url": "https://tampa.craigslist.org/search/sss?format=rss&query=golf+cart"
     },
     {
         "region": "Sarasota / Bradenton", 
-        "url": "https://openrss.org/sarasota.craigslist.org/search/sss?query=golf+cart"
+        "rss_url": "https://sarasota.craigslist.org/search/sss?format=rss&query=golf+cart"
     }
 ]
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
 # ==========================================
@@ -87,48 +86,57 @@ def send_rich_email_alert(title, url, region, source):
         print(f"  ❌ Failed to send email: {e}")
 
 # ==========================================
-# CRAIGSLIST RSS PARSER
+# CRAIGSLIST VIA RSS2JSON PROXY PARSER
 # ==========================================
-def check_craigslist_feeds(seen_items):
-    print("🔍 Checking Florida Craigslist RSS feeds for Golf Carts...")
+def check_craigslist_rss(seen_items):
+    print("🔍 Checking Florida Craigslist feeds via RSS2JSON proxy...")
     
     for feed_info in CRAIGSLIST_FEEDS:
         region = feed_info["region"]
-        url = feed_info["url"]
-        print(f"  Fetching RSS for [{region}]...")
+        rss_url = feed_info["rss_url"]
+        
+        # Construct proxy request to convert RSS XML to JSON
+        api_url = f"https://api.rss2json.com/v1/api.json?rss_url={requests.utils.quote(rss_url)}"
+        print(f"  Fetching feed for [{region}]...")
         
         try:
-            response = requests.get(url, headers=HEADERS, timeout=15)
+            response = requests.get(api_url, headers=HEADERS, timeout=15)
             if response.status_code != 200:
                 print(f"    Status code {response.status_code} for {region}")
                 continue
 
-            root = ET.fromstring(response.content)
-            items = root.findall(".//{http://purl.org/rss/1.0/}item") or root.findall(".//item")
-            
+            data = response.json()
+            if data.get("status") != "ok":
+                print(f"    RSS2JSON error for {region}: {data.get('message', 'Unknown error')}")
+                continue
+
+            items = data.get("items", [])
             new_found = 0
+            
             for item in items:
-                title_node = item.find("{http://purl.org/rss/1.0/}title") or item.find("title")
-                link_node = item.find("{http://purl.org/rss/1.0/}link") or item.find("link")
+                title = item.get("title", "").strip()
+                link = item.get("link", "").strip()
                 
-                if title_node is None or link_node is None:
+                if not link or not title:
                     continue
                     
-                title = title_node.text.strip()
-                link = link_node.text.strip()
+                clean_url = link.split("?")[0]
                 
-                if link not in seen_items:
+                if clean_url not in seen_items:
                     print(f"\n🚨 NEW CRAIGSLIST GOLF CART FOUND IN {region.upper()}!")
-                    send_rich_email_alert(title, link, region, "Craigslist")
-                    save_seen_item(link)
-                    seen_items.add(link)
+                    send_rich_email_alert(title, clean_url, region, "Craigslist")
+                    save_seen_item(clean_url)
+                    seen_items.add(clean_url)
                     new_found += 1
             
             if new_found == 0:
-                print(f"    No new listings in {region}.")
+                print(f"    No new listings found in {region}.")
+
+            # Polite delay between regional calls
+            time.sleep(2)
 
         except Exception as e:
-            print(f"⚠️ Error checking Craigslist feed for {region}: {e}")
+            print(f"⚠️ Error checking Craigslist for {region}: {e}")
 
 # ==========================================
 # NEXTDOOR EMAIL IMAP PARSER
@@ -191,7 +199,7 @@ def main():
     seen_items = load_seen_items()
     print("🚀 Starting Florida Golf Cart Monitor check...")
     
-    check_craigslist_feeds(seen_items)
+    check_craigslist_rss(seen_items)
     check_nextdoor_emails(seen_items)
 
     print("\n✅ Golf cart monitor execution completed successfully.")
