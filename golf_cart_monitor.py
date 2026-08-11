@@ -5,7 +5,6 @@ import re
 import smtplib
 import imaplib
 import email
-from email.header import decode_header
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from bs4 import BeautifulSoup
@@ -20,20 +19,22 @@ RECIPIENT_EMAIL = os.getenv("RECIPIENT_EMAIL", "recipient_email@gmail.com")
 
 SEEN_FILE = "seen_golf_carts.txt"
 
-# Direct search URLs for Florida Craigslist regions
+# Direct Craigslist Search RSS/HTML endpoints
 CRAIGSLIST_SEARCHES = [
     {
         "region": "Tampa Bay Area", 
-        "url": "https://tampa.craigslist.org/search/sss?query=golf+cart"
+        "url": "https://tampa.craigslist.org/search/sss?format=rss&query=golf+cart"
     },
     {
         "region": "Sarasota / Bradenton", 
-        "url": "https://sarasota.craigslist.org/search/sss?query=golf+cart"
+        "url": "https://sarasota.craigslist.org/search/sss?format=rss&query=golf+cart"
     }
 ]
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5"
 }
 
 # ==========================================
@@ -65,8 +66,8 @@ def send_rich_email_alert(title, url, region, source):
           <div style="margin-top: 20px;">
             <a href="{url}" style="background-color: #e65100; color: white; padding: 12px 20px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold;">View Listing Details &rarr;</a>
           </div>
-          <hr style="margin-top: 30px; border: None; border-top: 1px solid #eeeeee;">
-          <p style="font-size: 12px; color: #888888;">Automated alert from Golf Cart Finder System (Florida Region).</p>
+          <hr style="margin-top: 30px; border: none; border-top: 1px solid #eeeeee;">
+          <p style="font-size: 12px; color: #888888;">Automated alert from Golf Cart Finder System.</p>
         </div>
       </body>
     </html>
@@ -87,53 +88,58 @@ def send_rich_email_alert(title, url, region, source):
         print(f"  ❌ Failed to send email: {e}")
 
 # ==========================================
-# CRAIGSLIST PROXY SCRAPER (ALLORIGINS + JINA FALLBACK)
+# CRAIGSLIST DIRECT SCRAPER (CHROME IMPERSONATION)
 # ==========================================
-def fetch_craigslist_html(target_url):
-    """Fetches Craigslist page content using proxy proxies to bypass Cloudflare/IP blocks."""
-    # Method 1: AllOrigins Proxy
-    proxy_url = f"https://api.allorigins.win/get?url={requests.utils.quote(target_url)}"
+def fetch_craigslist_direct(target_url):
+    """Uses curl_cffi with full Chrome TLS fingerprinting to bypass cloud blocks directly."""
     try:
-        resp = requests.get(proxy_url, headers=HEADERS, timeout=15)
+        # impersonate="chrome120" spoofs real Chrome SSL/TLS handshake
+        resp = requests.get(target_url, headers=HEADERS, impersonate="chrome120", timeout=15)
         if resp.status_code == 200:
-            data = resp.json()
-            html = data.get("contents", "")
-            if len(html) > 1000:
-                return html
-    except Exception as e:
-        print(f"    Primary proxy attempt failed: {e}")
-
-    # Method 2: Jina Reader Proxy (Fallback)
-    jina_url = f"https://r.jina.ai/{target_url}"
-    try:
-        resp = requests.get(jina_url, headers=HEADERS, timeout=15)
-        if resp.status_code == 200 and len(resp.text) > 500:
             return resp.text
+        else:
+            print(f"    Http status {resp.status_code} received.")
     except Exception as e:
-        print(f"    Fallback proxy attempt failed: {e}")
-
+        print(f"    Direct connection attempt failed: {e}")
     return None
 
 def check_craigslist(seen_items):
-    print("🔍 Checking Florida Craigslist listings via proxy gateway...")
+    print("🔍 Checking Florida Craigslist listings directly...")
     
     for search_info in CRAIGSLIST_SEARCHES:
         region = search_info["region"]
         target_url = search_info["url"]
         print(f"  Fetching [{region}]...")
         
-        content = fetch_craigslist_html(target_url)
+        content = fetch_craigslist_direct(target_url)
         if not content:
             print(f"    ⚠️ Could not fetch listings for {region}.")
             continue
 
         new_found = 0
+        soup = BeautifulSoup(content, "xml" if "<?xml" in content else "html.parser")
 
-        # Parse either standard HTML or Markdown returned by Jina
-        if "<a " in content or "<html" in content.lower():
-            soup = BeautifulSoup(content, "html.parser")
+        # Parse RSS items if available
+        items = soup.find_all("item")
+        if items:
+            for item in items:
+                title_elem = item.find("title")
+                link_elem = item.find("link")
+                
+                if title_elem and link_elem:
+                    title = title_elem.text.strip()
+                    raw_link = link_elem.text.strip()
+                    clean_url = raw_link.split("?")[0]
+                    
+                    if clean_url not in seen_items:
+                        print(f"\n🚨 NEW CRAIGSLIST GOLF CART FOUND IN {region.upper()}!")
+                        send_rich_email_alert(title, clean_url, region, "Craigslist")
+                        save_seen_item(clean_url)
+                        seen_items.add(clean_url)
+                        new_found += 1
+        else:
+            # HTML Fallback Parser
             listing_links = soup.find_all("a", href=re.compile(r"/(sno|sss|spo|bar|msg|rvs)/d/", re.I))
-            
             for a_tag in listing_links:
                 href = a_tag.get("href", "")
                 if not href:
@@ -152,18 +158,6 @@ def check_craigslist(seen_items):
                     save_seen_item(clean_url)
                     seen_items.add(clean_url)
                     new_found += 1
-        else:
-            # Markdown link parsing fallback
-            matches = re.findall(r'\[(.*?)\]\((https://[a-z]+\.craigslist\.org/[^\s\)]+)\)', content)
-            for title, link in matches:
-                clean_url = link.split("?")[0]
-                if "golf" in title.lower() or "cart" in title.lower() or "club" in title.lower():
-                    if clean_url not in seen_items:
-                        print(f"\n🚨 NEW CRAIGSLIST GOLF CART FOUND IN {region.upper()}!")
-                        send_rich_email_alert(title, clean_url, region, "Craigslist")
-                        save_seen_item(clean_url)
-                        seen_items.add(clean_url)
-                        new_found += 1
 
         if new_found == 0:
             print(f"    No new listings found in {region}.")
