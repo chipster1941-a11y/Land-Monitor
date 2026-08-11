@@ -105,17 +105,26 @@ def check_craigslist(seen_items):
                 continue
 
             soup = BeautifulSoup(resp.text, "html.parser")
-            listing_links = soup.find_all("a", href=re.compile(r"/(sno|sss|spo|bar|msg|rvs)/d/", re.I))
+            
+            # Match any link pointing to a listing detail page (.html or /d/)
+            listing_links = soup.find_all("a", href=re.compile(r"/d/|\.html", re.I))
             new_found = 0
             
             for a_tag in listing_links:
                 href = a_tag.get("href", "")
-                if not href:
+                if not href or "search" in href:
                     continue
                 
                 clean_url = href.split("?")[0]
-                title = a_tag.text.strip() or f"Golf Cart Listing in {region}"
-                title = " ".join(title.split())
+                
+                # Get link title or check parent container text
+                title = a_tag.text.strip()
+                if not title or len(title) < 3:
+                    parent = a_tag.find_parent(["li", "div", "h3"])
+                    if parent:
+                        title = parent.text.strip()
+                
+                title = " ".join((title or f"Golf Cart Listing in {region}").split())
                 
                 if clean_url not in seen_items and len(title) > 3:
                     print(f"\n🚨 NEW CRAIGSLIST GOLF CART FOUND IN {region.upper()}!")
