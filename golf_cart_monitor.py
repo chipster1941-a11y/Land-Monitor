@@ -19,22 +19,22 @@ RECIPIENT_EMAIL = os.getenv("RECIPIENT_EMAIL", "recipient_email@gmail.com")
 
 SEEN_FILE = "seen_golf_carts.txt"
 
-# Direct Craigslist Search RSS/HTML endpoints
+# Craigslist Area Search Endpoints (Dozer Format)
 CRAIGSLIST_SEARCHES = [
     {
         "region": "Tampa Bay Area", 
-        "url": "https://tampa.craigslist.org/search/sss?format=rss&query=golf+cart"
+        "url": "https://www.craigslist.org/search/area/tampa?cat=sss&query=golf+cart"
     },
     {
         "region": "Sarasota / Bradenton", 
-        "url": "https://sarasota.craigslist.org/search/sss?format=rss&query=golf+cart"
+        "url": "https://www.craigslist.org/search/area/sarasota?cat=sss&query=golf+cart"
     }
 ]
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.5"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
 }
 
 # ==========================================
@@ -88,67 +88,32 @@ def send_rich_email_alert(title, url, region, source):
         print(f"  ❌ Failed to send email: {e}")
 
 # ==========================================
-# CRAIGSLIST DIRECT SCRAPER (CHROME IMPERSONATION)
+# CRAIGSLIST AREA SEARCH SCRAPER
 # ==========================================
-def fetch_craigslist_direct(target_url):
-    """Uses curl_cffi with full Chrome TLS fingerprinting to bypass cloud blocks directly."""
-    try:
-        # impersonate="chrome120" spoofs real Chrome SSL/TLS handshake
-        resp = requests.get(target_url, headers=HEADERS, impersonate="chrome120", timeout=15)
-        if resp.status_code == 200:
-            return resp.text
-        else:
-            print(f"    Http status {resp.status_code} received.")
-    except Exception as e:
-        print(f"    Direct connection attempt failed: {e}")
-    return None
-
 def check_craigslist(seen_items):
-    print("🔍 Checking Florida Craigslist listings directly...")
+    print("🔍 Checking Florida Craigslist listings via Area Search URL...")
     
     for search_info in CRAIGSLIST_SEARCHES:
         region = search_info["region"]
         target_url = search_info["url"]
         print(f"  Fetching [{region}]...")
         
-        content = fetch_craigslist_direct(target_url)
-        if not content:
-            print(f"    ⚠️ Could not fetch listings for {region}.")
-            continue
+        try:
+            resp = requests.get(target_url, headers=HEADERS, impersonate="chrome", timeout=15)
+            if resp.status_code != 200:
+                print(f"    Http status {resp.status_code} received for {region}.")
+                continue
 
-        new_found = 0
-        soup = BeautifulSoup(content, "xml" if "<?xml" in content else "html.parser")
-
-        # Parse RSS items if available
-        items = soup.find_all("item")
-        if items:
-            for item in items:
-                title_elem = item.find("title")
-                link_elem = item.find("link")
-                
-                if title_elem and link_elem:
-                    title = title_elem.text.strip()
-                    raw_link = link_elem.text.strip()
-                    clean_url = raw_link.split("?")[0]
-                    
-                    if clean_url not in seen_items:
-                        print(f"\n🚨 NEW CRAIGSLIST GOLF CART FOUND IN {region.upper()}!")
-                        send_rich_email_alert(title, clean_url, region, "Craigslist")
-                        save_seen_item(clean_url)
-                        seen_items.add(clean_url)
-                        new_found += 1
-        else:
-            # HTML Fallback Parser
+            soup = BeautifulSoup(resp.text, "html.parser")
             listing_links = soup.find_all("a", href=re.compile(r"/(sno|sss|spo|bar|msg|rvs)/d/", re.I))
+            new_found = 0
+            
             for a_tag in listing_links:
                 href = a_tag.get("href", "")
                 if not href:
                     continue
                 
-                domain = "tampa" if "tampa" in region.lower() else "sarasota"
-                full_url = href if href.startswith("http") else f"https://{domain}.craigslist.org{href}"
-                clean_url = full_url.split("?")[0]
-                
+                clean_url = href.split("?")[0]
                 title = a_tag.text.strip() or f"Golf Cart Listing in {region}"
                 title = " ".join(title.split())
                 
@@ -159,8 +124,11 @@ def check_craigslist(seen_items):
                     seen_items.add(clean_url)
                     new_found += 1
 
-        if new_found == 0:
-            print(f"    No new listings found in {region}.")
+            if new_found == 0:
+                print(f"    No new listings found in {region}.")
+
+        except Exception as e:
+            print(f"    Error querying {region}: {e}")
 
         time.sleep(2)
 
