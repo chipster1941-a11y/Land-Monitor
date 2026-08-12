@@ -139,17 +139,20 @@ def scrape_craigslist():
             results = soup.select("li.cl-static-search-result") or soup.select("ol.cl-static-search-results li")
 
             for result in results:
-                title_elem = result.select_one(".title") or result.select_one("a")
-                price_elem = result.select_one(".price")
-                loc_elem = result.select_one(".location")
-
-                if not title_elem:
+                # Locate the link tag first
+                a_elem = result.select_one("a")
+                if not a_elem or not a_elem.get("href"):
                     continue
 
-                title = title_elem.text.strip()
-                link = title_elem.get("href")
-                
-                # Extract listing ID from URL
+                link = a_elem.get("href")
+                if link.startswith("/"):
+                    link = "https://www.craigslist.org" + link
+
+                # Extract title from title div or fallback to anchor text
+                title_elem = result.select_one(".title") or a_elem
+                title = title_elem.text.strip() if title_elem else "No Title"
+
+                # Extract listing ID from URL safely
                 post_id_match = re.search(r'/(\d+)\.html', link)
                 if not post_id_match:
                     continue
@@ -157,6 +160,9 @@ def scrape_craigslist():
 
                 if post_id in seen_ids:
                     continue
+
+                price_elem = result.select_one(".price")
+                loc_elem = result.select_one(".location")
 
                 price = price_elem.text.strip() if price_elem else "N/A"
                 location = loc_elem.text.strip() if loc_elem else "WI"
@@ -180,6 +186,7 @@ def scrape_craigslist():
             print(f"Error scraping {config['region']}: {e}")
 
     return new_matches
+
 
 
 # ==========================================
