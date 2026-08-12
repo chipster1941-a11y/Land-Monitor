@@ -1,145 +1,59 @@
 import os
 import re
 import smtplib
-import requests
-from bs4 import BeautifulSoup
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+import requests
+from bs4 import BeautifulSoup
 
 # ==========================================
-# CONFIGURATION
+# CONFIGURATION & CONSTANTS
 # ==========================================
-SMTP_SERVER = "smtp.gmail.com"
-SMTP_PORT = 587
-EMAIL_SENDER = os.getenv("EMAIL_SENDER")      # Your Gmail address
-EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")  # Your Gmail App Password
-EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")  # Where alerts are sent
-
 SEEN_FILE = "seen_properties.txt"
+COUNTIES = ["barron", "polk", "dunn", "washburn"]
+MIN_ACRES = 10
 
-# Targeted Craigslist Search Endpoints
-SEARCH_TARGETS = [
-    # --- FARMLAND & ACREAGE (cat=laa -> Land for Sale) ---
-    {
-        "type": "Farmland",
-        "region": "Polk County Area",
-        "url": "https://www.craigslist.org/search/area/minneapolis?cat=laa&query=land+acre"
-    },
-    {
-        "type": "Farmland",
-        "region": "Barron & Dunn Counties Area",
-        "url": "https://www.craigslist.org/search/area/eauclaire?cat=laa&query=land+acre"
-    },
-    {
-        "type": "Farmland",
-        "region": "Washburn County Area",
-        "url": "https://www.craigslist.org/search/area/duluth?cat=laa&query=land+acre"
-    },
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+}
 
-    # --- LAKE CABINS & REAL ESTATE (cat=rea -> Real Estate) ---
-    {
-        "type": "Cabin",
-        "region": "Polk County / St. Croix Valley",
-        "url": "https://www.craigslist.org/search/area/minneapolis?cat=rea&query=cabin+lake"
-    },
-    {
-        "type": "Cabin",
-        "region": "Barron & Dunn / Chippewa Valley",
-        "url": "https://www.craigslist.org/search/area/eauclaire?cat=rea&query=cabin+lake"
-    },
-    {
-        "type": "Cabin",
-        "region": "Washburn County / Spooner Area",
-        "url": "https://www.craigslist.org/search/area/duluth?cat=rea&query=cabin+lake"
-    }
+# Craigslist Search Configs
+CRAIGSLIST_TARGETS = [
+    {"url": "https://eauclaire.craigslist.org/search/rea?query=barron+dunn", "region": "Barron & Dunn Counties"},
+    {"url": "https://minneapolis.craigslist.org/search/rea?query=polk", "region": "Polk County"},
+    {"url": "https://rmn.craigslist.org/search/rea?query=washburn", "region": "Washburn County"},
 ]
-
-# Keywords to ensure we only catch target Wisconsin areas
-TARGET_COUNTIES_KEYWORDS = [
-    "polk", "barron", "dunn", "washburn", "spooner", "rice lake", 
-    "balsam lake", "cumberland", "menomonie", "shell lake", "birchwood",
-    "chetek", "luck", "milltown", "amery", "frederic", "siren", "turtle lake"
-]
-
 
 # ==========================================
-# HELPER FUNCTIONS
+# SEEN ID MANAGEMENT
 # ==========================================
 def load_seen_ids():
-    """Loads previously alerted post IDs from a file."""
-    if os.path.exists(SEEN_FILE):
-        with open(SEEN_FILE, "r") as f:
-            return set(line.strip() for line in f if line.strip())
-    return set()
+    if not os.path.exists(SEEN_FILE):
+        return set()
+    with open(SEEN_FILE, "r") as f:
+        return set(line.strip() for line in f if line.strip())
 
-def save_seen_id(post_id):
-    """Appends a new post ID to the seen file."""
+def save_seen_id(listing_id):
     with open(SEEN_FILE, "a") as f:
-        f.write(f"{post_id}\n")
-
-def extract_acreage(title):
-    """Extracts acreage numbers from the title if mentioned."""
-    match = re.search(r'(\d+(?:\.\d+)?)\s*(?:-\s*)?(?:acre|acres|ac)\b', title, re.IGNORECASE)
-    if match:
-        try:
-            return float(match.group(1))
-        except ValueError:
-            return None
-    return None
-
-def is_valid_match(item, target_config):
-    """Filters listings based on type, acreage, and county keywords."""
-    title_lower = item['title'].lower()
-    
-    # Optional County Keyword Verification
-    # Matches if any target town/county is mentioned in title or location
-    location_lower = item['location'].lower()
-    location_match = any(k in title_lower or k in location_lower for k in TARGET_COUNTIES_KEYWORDS)
-
-    # 1. FARMLAND FILTER LOGIC
-    if target_config['type'] == "Farmland":
-        acreage = extract_acreage(title_lower)
-        if acreage is not None:
-            # Strictly filter out anything under 10 acres if an acreage number was detected
-            if acreage < 10.0:
-                return False
-        # Return True if it mentions 10+ acres or mentions land in our target regions
-        return location_match or "acre" in title_lower
-
-    # 2. CABIN FILTER LOGIC
-    elif target_config['type'] == "Cabin":
-        cabin_keywords = ["cabin", "lake home", "lakefront", "waterfront", "cottage"]
-        has_cabin_kw = any(kw in title_lower for kw in cabin_keywords)
-        return has_cabin_kw and location_match
-
-    return False
-
+        f.write(f"{listing_id}\n")
 
 # ==========================================
-# SCRAPER LOGIC
+# SCRAPER 1: CRAIGSLIST
 # ==========================================
-def scrape_craigslist():
-    seen_ids = load_seen_ids()
-    new_matches = []
+def scrape_craigslist(seen_ids):
+    print("\n[1/3] Checking Craigslist...")
+    matches = []
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
-
-    print("Checking Craigslist for Wisconsin Farmland & Cabins...")
-
-    for config in SEARCH_TARGETS:
+    for target in CRAIGSLIST_TARGETS:
         try:
-            res = requests.get(config["url"], headers=headers, timeout=10)
+            res = requests.get(target["url"], headers=HEADERS, timeout=10)
             if res.status_code != 200:
-                print(f"Failed to fetch {config['region']} (Status: {res.status_code})")
                 continue
 
             soup = BeautifulSoup(res.text, "html.parser")
             results = soup.select("li.cl-static-search-result") or soup.select("ol.cl-static-search-results li")
 
             for result in results:
-                # Locate the link tag first
                 a_elem = result.select_one("a")
                 if not a_elem or not a_elem.get("href"):
                     continue
@@ -148,15 +62,13 @@ def scrape_craigslist():
                 if link.startswith("/"):
                     link = "https://www.craigslist.org" + link
 
-                # Extract title from title div or fallback to anchor text
                 title_elem = result.select_one(".title") or a_elem
                 title = title_elem.text.strip() if title_elem else "No Title"
 
-                # Extract listing ID from URL safely
                 post_id_match = re.search(r'/(\d+)\.html', link)
                 if not post_id_match:
                     continue
-                post_id = post_id_match.group(1)
+                post_id = f"cl_{post_id_match.group(1)}"
 
                 if post_id in seen_ids:
                     continue
@@ -167,83 +79,219 @@ def scrape_craigslist():
                 price = price_elem.text.strip() if price_elem else "N/A"
                 location = loc_elem.text.strip() if loc_elem else "WI"
 
-                item = {
-                    "id": post_id,
-                    "title": title,
-                    "price": price,
-                    "location": location,
-                    "link": link,
-                    "region": config["region"],
-                    "type": config["type"]
-                }
-
-                if is_valid_match(item, config):
-                    new_matches.append(item)
+                # Check if it matches target counties or cabin/acreage keywords
+                title_lower = title.lower()
+                if any(c in title_lower for c in COUNTIES) or any(kw in title_lower for kw in ["cabin", "lake", "acre", "farm", "land"]):
+                    item = {
+                        "id": post_id,
+                        "title": title,
+                        "price": price,
+                        "location": location,
+                        "link": link,
+                        "source": "Craigslist"
+                    }
+                    matches.append(item)
                     seen_ids.add(post_id)
                     save_seen_id(post_id)
 
         except Exception as e:
-            print(f"Error scraping {config['region']}: {e}")
+            print(f"Error scraping Craigslist target ({target['region']}): {e}")
 
-    return new_matches
-
-
+    return matches
 
 # ==========================================
-# EMAIL ALERT LOGIC
+# SCRAPER 2: LANDWATCH
 # ==========================================
-def send_email_alert(listings):
-    if not listings:
-        print("No new matches found.")
+def scrape_landwatch(seen_ids):
+    print("[2/3] Checking LandWatch...")
+    matches = []
+
+    # LandWatch search URL for Wisconsin land
+    url = "https://www.landwatch.com/wisconsin-land-for-sale/acres-10-plus"
+
+    try:
+        res = requests.get(url, headers=HEADERS, timeout=12)
+        if res.status_code != 200:
+            print(f"LandWatch request returned status {res.status_code}")
+            return matches
+
+        soup = BeautifulSoup(res.text, "html.parser")
+        listings = soup.select("div[data-record-id]") or soup.select(".listing-card")
+
+        for card in listings:
+            card_id = card.get("data-record-id") or card.get("id")
+            if not card_id:
+                continue
+
+            post_id = f"lw_{card_id}"
+            if post_id in seen_ids:
+                continue
+
+            title_elem = card.select_one("a[title]") or card.select_one(".title")
+            title = title_elem.text.strip() if title_elem else "WI Land Listing"
+
+            link_elem = card.select_one("a[href]")
+            link = "https://www.landwatch.com" + link_elem["href"] if link_elem and link_elem["href"].startswith("/") else (link_elem["href"] if link_elem else "")
+
+            price_elem = card.select_one(".price") or card.select_one("[class*='price']")
+            price = price_elem.text.strip() if price_elem else "N/A"
+
+            # Check county match
+            title_lower = title.lower()
+            if any(county in title_lower for county in COUNTIES):
+                item = {
+                    "id": post_id,
+                    "title": title,
+                    "price": price,
+                    "location": "WI Target County",
+                    "link": link,
+                    "source": "LandWatch"
+                }
+                matches.append(item)
+                seen_ids.add(post_id)
+                save_seen_id(post_id)
+
+    except Exception as e:
+        print(f"Error scraping LandWatch: {e}")
+
+    return matches
+
+# ==========================================
+# SCRAPER 3: LANDANDFARM
+# ==========================================
+def scrape_landandfarm(seen_ids):
+    print("[3/3] Checking LandAndFarm...")
+    matches = []
+
+    url = "https://www.landandfarm.com/search/wisconsin-land-for-sale/"
+
+    try:
+        res = requests.get(url, headers=HEADERS, timeout=12)
+        if res.status_code != 200:
+            return matches
+
+        soup = BeautifulSoup(res.text, "html.parser")
+        cards = soup.select(".property-card") or soup.select("article")
+
+        for card in cards:
+            link_elem = card.select_one("a[href]")
+            if not link_elem:
+                continue
+
+            link = link_elem["href"]
+            if link.startswith("/"):
+                link = "https://www.landandfarm.com" + link
+
+            # Extract numeric ID from link
+            id_match = re.search(r'/(\d+)/?$', link)
+            if not id_match:
+                continue
+
+            post_id = f"laf_{id_match.group(1)}"
+            if post_id in seen_ids:
+                continue
+
+            title_elem = card.select_one(".title") or card.select_one("h2") or link_elem
+            title = title_elem.text.strip() if title_elem else "Wisconsin Farm/Land"
+
+            price_elem = card.select_one(".price")
+            price = price_elem.text.strip() if price_elem else "N/A"
+
+            title_lower = title.lower()
+            if any(county in title_lower for county in COUNTIES):
+                item = {
+                    "id": post_id,
+                    "title": title,
+                    "price": price,
+                    "location": "WI Target County",
+                    "link": link,
+                    "source": "LandAndFarm"
+                }
+                matches.append(item)
+                seen_ids.add(post_id)
+                save_seen_id(post_id)
+
+    except Exception as e:
+        print(f"Error scraping LandAndFarm: {e}")
+
+    return matches
+
+# ==========================================
+# EMAIL ALERT FUNCTION
+# ==========================================
+def send_email_alert(matches):
+    sender = os.getenv("SENDER_EMAIL") or os.getenv("EMAIL_SENDER")
+    password = os.getenv("SENDER_PASSWORD") or os.getenv("EMAIL_PASSWORD")
+    receiver = os.getenv("RECIPIENT_EMAIL") or os.getenv("EMAIL_RECEIVER")
+
+    if not sender or not password or not receiver:
+        print("Email credentials missing in environment variables. Skipping email notification.")
         return
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"🌲 WI Real Estate Alert: {len(listings)} New Listing(s) Found"
-    msg["From"] = EMAIL_SENDER
-    msg["To"] = EMAIL_RECEIVER
+    # Build Dynamic Subject Line
+    if len(matches) == 1:
+        item = matches[0]
+        acres_match = re.search(r'(\d+\.?\d*)\s*(?:-\s*)?acres?', item['title'], re.IGNORECASE)
+        acres_str = f"{acres_match.group(1)} Acres" if acres_match else "Property"
+        subject = f"🌲 WI Alert: {item['price']} | {acres_str} | {item['source']} - {item['title'][:35]}..."
+    else:
+        prices = [m['price'] for m in matches if m['price'] != "N/A"]
+        price_range = f" ({min(prices)} - {max(prices)})" if prices else ""
+        subject = f"🌲 WI Alert: {len(matches)} New Property Listings{price_range}"
 
     # Build HTML Email Body
     html_items = ""
-    for item in listings:
-        badge_color = "#2e7d32" if item['type'] == "Farmland" else "#0277bd"
+    for item in matches:
         html_items += f"""
-        <div style="border: 1px solid #ddd; padding: 15px; margin-bottom: 15px; border-radius: 8px;">
-            <span style="background-color: {badge_color}; color: white; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: bold;">
-                {item['type'].upper()}
-            </span>
-            <span style="color: #666; font-size: 12px; margin-left: 10px;">{item['region']}</span>
-            <h3 style="margin: 8px 0 4px 0;"><a href="{item['link']}" style="color: #1a0dab; text-decoration: none;">{item['title']}</a></h3>
-            <p style="margin: 0; font-size: 16px; font-weight: bold; color: #2d3748;">
-                Price: {item['price']} | Location: {item['location']}
-            </p>
+        <div style="border: 1px solid #ddd; padding: 15px; margin-bottom: 15px; border-radius: 8px; font-family: sans-serif;">
+            <h3 style="margin-top: 0; color: #2c3e50;">{item['title']}</h3>
+            <p><strong>Price:</strong> <span style="color: #27ae60; font-size: 1.1em;">{item['price']}</span></p>
+            <p><strong>Source:</strong> {item['source']} | <strong>Location:</strong> {item['location']}</p>
+            <p><a href="{item['link']}" target="_blank" style="background-color: #2980b9; color: white; padding: 8px 12px; text-decoration: none; border-radius: 4px; display: inline-block;">View Listing</a></p>
         </div>
         """
 
-    html_content = f"""
+    html_body = f"""
     <html>
-      <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-        <h2 style="color: #1b5e20;">Northwestern WI Land & Cabin Alert</h2>
-        <p>The following new listings were found in Barron, Polk, Dunn, or Washburn counties:</p>
+      <body>
+        <h2 style="color: #27ae60;">🌲 Wisconsin Property Alert</h2>
+        <p>Found <strong>{len(matches)}</strong> new listing(s) matching your criteria:</p>
         {html_items}
       </body>
     </html>
     """
 
-    msg.attach(MIMEText(html_content, "html"))
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = sender
+    msg["To"] = receiver
+    msg.attach(MIMEText(html_body, "html"))
 
     try:
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.starttls()
-            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-            server.send_message(msg)
-        print(f"Successfully sent email alert for {len(listings)} listing(s)!")
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(sender, password)
+            server.sendmail(sender, receiver, msg.as_string())
+        print(f"Successfully sent email alert! Subject: {subject}")
     except Exception as e:
         print(f"Failed to send email: {e}")
 
+# ==========================================
+# MAIN RUNNER
+# ==========================================
+def main():
+    seen_ids = load_seen_ids()
 
-# ==========================================
-# MAIN EXECUTION
-# ==========================================
+    all_matches = []
+    all_matches.extend(scrape_craigslist(seen_ids))
+    all_matches.extend(scrape_landwatch(seen_ids))
+    all_matches.extend(scrape_landandfarm(seen_ids))
+
+    print(f"\nScan complete. Total new matches found: {len(all_matches)}")
+
+    if all_matches:
+        send_email_alert(all_matches)
+    else:
+        print("No new property listings found on this run.")
+
 if __name__ == "__main__":
-    matches = scrape_craigslist()
-    send_email_alert(matches)
+    main()
