@@ -293,19 +293,7 @@ def main():
     all_matches.extend(scrape_landwatch(seen_ids))
     all_matches.extend(scrape_landandfarm(seen_ids))
 
-    # --- TEMPORARY TEST BLOCK ---
-    if not all_matches:
-        print("No real matches found. Injecting sample LandWatch item for email preview...")
-        all_matches.append({
-            "id": "lw_TEST_7777",
-            "title": "🌲 TEST ALERT: 25-Acre Wooded Parcel with Creek",
-            "price": "$145,000",
-            "location": "Dunn County, WI",
-            "link": "https://www.landwatch.com",
-            "source": "LandWatch"
-        })
-    # ----------------------------
-
+    
     print(f"\nScan complete. Total matches found: {len(all_matches)}")
 
     if all_matches:
