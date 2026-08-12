@@ -5,6 +5,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import requests
 from bs4 import BeautifulSoup
+from curl_cffi import requests as curl_requests
 
 # ==========================================
 # CONFIGURATION & CONSTANTS
@@ -112,17 +113,18 @@ def scrape_landwatch(seen_ids):
     print("[2/3] Checking LandWatch...")
     matches = []
 
-    # LandWatch search URL for Wisconsin land
     url = "https://www.landwatch.com/wisconsin-land-for-sale/acres-10-plus"
 
     try:
-        res = requests.get(url, headers=HEADERS, timeout=12)
+        # impersonate="chrome120" spoofs Chrome's real TLS fingerprint to defeat Cloudflare
+        res = curl_requests.get(url, impersonate="chrome120", timeout=15)
+        
         if res.status_code != 200:
             print(f"LandWatch request returned status {res.status_code}")
             return matches
 
         soup = BeautifulSoup(res.text, "html.parser")
-        listings = soup.select("div[data-record-id]") or soup.select(".listing-card")
+        listings = soup.select("div[data-record-id]") or soup.select(".listing-card") or soup.select("article")
 
         for card in listings:
             card_id = card.get("data-record-id") or card.get("id")
@@ -133,7 +135,7 @@ def scrape_landwatch(seen_ids):
             if post_id in seen_ids:
                 continue
 
-            title_elem = card.select_one("a[title]") or card.select_one(".title")
+            title_elem = card.select_one("a[title]") or card.select_one(".title") or card.select_one("h2")
             title = title_elem.text.strip() if title_elem else "WI Land Listing"
 
             link_elem = card.select_one("a[href]")
@@ -142,7 +144,6 @@ def scrape_landwatch(seen_ids):
             price_elem = card.select_one(".price") or card.select_one("[class*='price']")
             price = price_elem.text.strip() if price_elem else "N/A"
 
-            # Check county match
             title_lower = title.lower()
             if any(county in title_lower for county in COUNTIES):
                 item = {
