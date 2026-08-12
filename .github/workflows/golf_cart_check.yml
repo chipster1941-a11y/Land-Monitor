@@ -33,6 +33,7 @@ jobs:
           SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
           SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
           RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+          NEXTDOOR_SESSION_ID: ${{ secrets.NEXTDOOR_SESSION_ID }}
         run: python golf_cart_monitor.py
 
       - name: Save seen listings back to GitHub
