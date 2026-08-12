@@ -46,47 +46,47 @@ def scrape_nextdoor(seen_ids):
             browser = p.chromium.launch(headless=True)
 
             context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                viewport={"width": 1280, "height": 800}
             )
 
-            # Set Nextdoor session cookies
+            # Set Nextdoor session cookies for multiple domain variations
             if NEXTDOOR_SESSION_ID:
-                context.add_cookies([
-                    {
-                        "name": "ndp_session",
-                        "value": NEXTDOOR_SESSION_ID,
-                        "domain": ".nextdoor.com",
-                        "path": "/",
-                        "secure": True,
-                        "httpOnly": True
-                    },
-                    {
-                        "name": "sessionid",
-                        "value": NEXTDOOR_SESSION_ID,
-                        "domain": ".nextdoor.com",
-                        "path": "/",
-                        "secure": True,
-                        "httpOnly": True
-                    }
-                ])
+                cookies = []
+                for domain in [".nextdoor.com", "nextdoor.com", "www.nextdoor.com"]:
+                    cookies.extend([
+                        {"name": "ndp_session", "value": NEXTDOOR_SESSION_ID, "domain": domain, "path": "/"},
+                        {"name": "sessionid", "value": NEXTDOOR_SESSION_ID, "domain": domain, "path": "/"}
+                    ])
+                context.add_cookies(cookies)
 
             page = context.new_page()
 
             print(f" -> Navigating to Nextdoor search: {NEXTDOOR_SEARCH_URL}")
-            page.goto(NEXTDOOR_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_timeout(5000)  # Wait for JS dynamic grid rendering
+            page.goto(NEXTDOOR_SEARCH_URL, wait_until="networkidle", timeout=30000)
+            page.wait_for_timeout(4000)  # Extra buffer for dynamic JS elements
+
+            # DIAGNOSTICS
+            print(f" -> Landed URL: {page.url}")
+            print(f" -> Page Title: {page.title()}")
 
             soup = BeautifulSoup(page.content(), "html.parser")
 
-            cards = soup.select('a[href*="/for_sale_and_free/"]') or soup.select('a[href*="/p/"]') or soup.select('div[data-testid="item-card"]')
+            # Broader selector search across candidate links and listing cards
+            all_links = soup.find_all("a", href=True)
+            candidate_hrefs = [a['href'] for a in all_links if any(x in a['href'] for x in ['/for_sale_and_free/', '/p/', '/finds/', '/item/'])]
+            print(f" -> Diagnostic: Found {len(all_links)} total links, {len(candidate_hrefs)} listing candidate links.")
+
+            cards = soup.select('a[href*="/for_sale_and_free/"]') or soup.select('a[href*="/p/"]') or soup.select('a[href*="/finds/"]') or soup.select('div[data-testid]')
 
             print(f" -> Found {len(cards)} raw candidate cards on page.")
 
             for card in cards:
                 href = card.get("href", "")
-                if not href or ("/for_sale_and_free/" not in href and "/p/" not in href):
+                if not href:
                     continue
 
+                # Extract listing ID
                 item_id = href.strip("/").split("/")[-1]
                 full_id = f"nd_cart_{item_id}"
 
@@ -96,7 +96,7 @@ def scrape_nextdoor(seen_ids):
                 full_url = f"https://nextdoor.com{href}" if href.startswith("/") else href
 
                 text_content = card.get_text(separator=" ").strip()
-                if not text_content:
+                if not text_content or len(text_content) < 5:
                     continue
 
                 lines = [line.strip() for line in text_content.split("\n") if line.strip()]
