@@ -13,11 +13,25 @@ from curl_cffi import requests
 # ==========================================
 # CONFIGURATION & CONSTANTS
 # ==========================================
-SENDER_EMAIL = os.getenv("SENDER_EMAIL", "your_email@gmail.com")
-SENDER_PASSWORD = os.getenv("SENDER_PASSWORD", "your_app_password")
-RECIPIENT_EMAIL = os.getenv("RECIPIENT_EMAIL", "recipient_email@gmail.com")
+SENDER_EMAIL = os.getenv("SENDER_EMAIL", "chipster1941@gmail.com")
+SENDER_PASSWORD = os.getenv("SENDER_PASSWORD", "ygyk ijmw qowl qpad")
+RECIPIENT_EMAIL = os.getenv("RECIPIENT_EMAIL", "kwolf100@hotmail.com")
 
 SEEN_FILE = "seen_golf_carts.txt"
+
+# ------------------------------------------
+# FILTERING CONFIGURATION
+# ------------------------------------------
+# Target brands: Set to ["yamaha"] for Yamaha only, or [] to allow all brands
+TARGET_BRANDS = ["yamaha", "club car", "ezgo", "ez-go", "ez go"]
+
+# Negative keywords to automatically discard junk / non-vehicle items
+EXCLUDE_KEYWORDS = [
+    "golf club", "golf clubs", "club set", "driver", "putter", "iron set", "irons", "wedges",
+    "golf bag", "cart bag", "stand bag", "golf ball", "golf balls", "golf shoes", "golf shirt",
+    "kayak", "kayaks", "keyboard", "keyboards", "outboard", "push cart", "pull cart", 
+    "hand cart", "trolley", "towel", "headcover", "glove", "gloves", "apparel", "hat"
+]
 
 # Craigslist Area Search Endpoints (Dozer Format)
 CRAIGSLIST_SEARCHES = [
@@ -51,17 +65,37 @@ def save_seen_item(item_url):
         f.write(f"{item_url}\n")
 
 # ==========================================
+# FILTERING ENGINE
+# ==========================================
+def is_valid_golf_cart_listing(text):
+    """Evaluates text against brand requirements and negative keywords."""
+    text_lower = text.lower()
+    
+    # 1. Reject if any negative keyword phrase is present
+    for bad_phrase in EXCLUDE_KEYWORDS:
+        if bad_phrase in text_lower:
+            return False
+            
+    # 2. Require target brand match if specified
+    if TARGET_BRANDS:
+        has_brand = any(brand.lower() in text_lower for brand in TARGET_BRANDS)
+        if not has_brand:
+            return False
+
+    return True
+
+# ==========================================
 # EMAIL NOTIFICATION FUNCTIONS
 # ==========================================
 def send_rich_email_alert(title, url, region, source):
-    subject = f"🛒 GOLF CART DEAL FOUND ({region}): {title[:40]}"
+    subject = f"🛒 YAMAHA GOLF CART DEAL ({region}): {title[:40]}"
     
     html_body = f"""
     <html>
       <body style="font-family: Arial, sans-serif; background-color: #fef8f0; padding: 20px;">
         <div style="max-width: 600px; margin: 0 auto; background: #ffffff; padding: 25px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
           <span style="background-color: #e65100; color: white; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold;">{source} ({region})</span>
-          <h2 style="color: #bf360c; margin-top: 15px;">Florida Golf Cart Listing</h2>
+          <h2 style="color: #bf360c; margin-top: 15px;">Matched Golf Cart Listing</h2>
           <p style="font-size: 18px; color: #333333;"><strong>{title}</strong></p>
           <div style="margin-top: 20px;">
             <a href="{url}" style="background-color: #e65100; color: white; padding: 12px 20px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold;">View Listing Details &rarr;</a>
@@ -91,7 +125,7 @@ def send_rich_email_alert(title, url, region, source):
 # CRAIGSLIST AREA SEARCH SCRAPER
 # ==========================================
 def check_craigslist(seen_items):
-    print("🔍 Checking Florida Craigslist listings via Area Search URL...")
+    print("🔍 Checking Florida Craigslist listings...")
     
     for search_info in CRAIGSLIST_SEARCHES:
         region = search_info["region"]
@@ -105,8 +139,6 @@ def check_craigslist(seen_items):
                 continue
 
             soup = BeautifulSoup(resp.text, "html.parser")
-            
-            # Match any link pointing to a listing detail page (.html or /d/)
             listing_links = soup.find_all("a", href=re.compile(r"/d/|\.html", re.I))
             new_found = 0
             
@@ -117,7 +149,6 @@ def check_craigslist(seen_items):
                 
                 clean_url = href.split("?")[0]
                 
-                # Get link title or check parent container text
                 title = a_tag.text.strip()
                 if not title or len(title) < 3:
                     parent = a_tag.find_parent(["li", "div", "h3"])
@@ -126,15 +157,20 @@ def check_craigslist(seen_items):
                 
                 title = " ".join((title or f"Golf Cart Listing in {region}").split())
                 
+                # Check uniqueness AND brand/negative filters
                 if clean_url not in seen_items and len(title) > 3:
-                    print(f"\n🚨 NEW CRAIGSLIST GOLF CART FOUND IN {region.upper()}!")
-                    send_rich_email_alert(title, clean_url, region, "Craigslist")
-                    save_seen_item(clean_url)
-                    seen_items.add(clean_url)
-                    new_found += 1
+                    if is_valid_golf_cart_listing(title):
+                        print(f"\n🚨 NEW YAMAHA GOLF CART FOUND IN {region.upper()}!")
+                        send_rich_email_alert(title, clean_url, region, "Craigslist")
+                        save_seen_item(clean_url)
+                        seen_items.add(clean_url)
+                        new_found += 1
+                    else:
+                        # Silently skip items that don't match our criteria (clubs, kayaks, other brands)
+                        pass
 
             if new_found == 0:
-                print(f"    No new listings found in {region}.")
+                print(f"    No new matching listings found in {region}.")
 
         except Exception as e:
             print(f"    Error querying {region}: {e}")
@@ -175,13 +211,14 @@ def check_nextdoor_emails(seen_items):
                     else:
                         body = msg.get_payload(decode=True).decode("utf-8", errors="ignore")
 
-                    if "golf cart" in body.lower():
+                    # Extract Nextdoor links if the email mentions a valid matching cart
+                    if is_valid_golf_cart_listing(body):
                         links = re.findall(r'https://nextdoor\.com/for_sale_and_free/[^"\s\'>]+', body)
                         for raw_url in links:
                             clean_url = raw_url.split("?")[0]
                             if clean_url not in seen_items:
-                                print(f"\n🚨 NEW NEXTDOOR GOLF CART FOUND VIA EMAIL!")
-                                send_rich_email_alert("Nextdoor Golf Cart Listing", clean_url, "Florida Area", "Nextdoor")
+                                print(f"\n🚨 NEW NEXTDOOR YAMAHA GOLF CART FOUND VIA EMAIL!")
+                                send_rich_email_alert("Nextdoor Yamaha Golf Cart Listing", clean_url, "Florida Area", "Nextdoor")
                                 save_seen_item(clean_url)
                                 seen_items.add(clean_url)
                                 new_found_count += 1
@@ -190,7 +227,7 @@ def check_nextdoor_emails(seen_items):
 
         mail.logout()
         if new_found_count == 0:
-            print("  Nextdoor emails processed, but no new unique golf cart links were found.")
+            print("  Nextdoor emails processed, but no new unique Yamaha golf cart links were found.")
 
     except Exception as e:
         print(f"⚠️ Error reading Nextdoor emails via IMAP: {e}")
