@@ -17,7 +17,6 @@ LOCAL_LONGITUDE = -82.5307
 
 # Search URLs
 NEXTDOOR_SEARCH_URL = f"https://nextdoor.com/for_sale_and_free/?query={SEARCH_QUERY.replace(' ', '%20')}"
-# OfferUp search using zip code & radius params
 OFFERUP_SEARCH_URL = f"https://offerup.com/search?q={SEARCH_QUERY.replace(' ', '%20')}&delivery_param=p&zip={LOCAL_ZIP}&radius=30"
 
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL")
@@ -47,7 +46,10 @@ def scrape_nextdoor(seen_ids):
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(
+                headless=True,
+                args=["--disable-blink-features=AutomationControlled"]
+            )
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
                 viewport={"width": 1280, "height": 800}
@@ -158,13 +160,27 @@ def scrape_offerup(seen_ids):
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            # Stealth browser launch
+            browser = p.chromium.launch(
+                headless=True,
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox"
+                ]
+            )
             
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                viewport={"width": 1280, "height": 800},
+                viewport={"width": 1366, "height": 768},
+                locale="en-US",
+                timezone_id="America/New_York",
                 geolocation={"latitude": LOCAL_LATITUDE, "longitude": LOCAL_LONGITUDE},
-                permissions=["geolocation"]
+                permissions=["geolocation"],
+                extra_http_headers={
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
+                }
             )
 
             # Pre-inject location cookies for OfferUp
@@ -175,6 +191,9 @@ def scrape_offerup(seen_ids):
             ])
             
             page = context.new_page()
+            # Mask navigator.webdriver automation flag
+            page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+
             print(f" -> Navigating to OfferUp search: {OFFERUP_SEARCH_URL}")
             page.goto(OFFERUP_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
             
@@ -182,61 +201,93 @@ def scrape_offerup(seen_ids):
             page.evaluate("window.scrollBy(0, 1000)")
             page.wait_for_timeout(3000)
 
-            soup = BeautifulSoup(page.content(), "html.parser")
-            
-            cards = (
-                soup.select('a[href*="/item/detail/"]') 
-                or soup.select('a[href*="/item/"]') 
-                or soup.select('div[data-testid*="item"]')
-                or soup.select('a[data-testid*="listing"]')
-            )
-            print(f" -> Found {len(cards)} raw candidate cards on OfferUp.")
+            page_title = page.title()
+            html_content = page.content()
+            soup = BeautifulSoup(html_content, "html.parser")
 
-            for card in cards:
-                href = card.get("href", "") if card.name == "a" else (card.find("a", href=True) or {}).get("href", "")
-                if not href or "/item/" not in href:
-                    continue
+            # Strategy 1: Check Next.js script payload directly
+            next_data_script = soup.find("script", id="__NEXT_DATA__")
+            if next_data_script and next_data_script.string:
+                try:
+                    payload = json.loads(next_data_script.string)
+                    # Recursively search for feed items in JSON
+                    payload_str = json.dumps(payload)
+                    item_ids = set(re.findall(r'"/item/detail/(\d+)"', payload_str) + re.findall(r'"id":"(\d+)"', payload_str))
+                    
+                    for i_id in item_ids:
+                        full_id = f"ou_cart_{i_id}"
+                        if full_id not in seen_ids:
+                            matches.append({
+                                "id": full_id,
+                                "title": "Golf Cart Listing (OfferUp)",
+                                "price": "Check Listing",
+                                "location": "Tampa/Sarasota Area (OfferUp)",
+                                "link": f"https://offerup.com/item/detail/{i_id}",
+                                "source": "OfferUp"
+                            })
+                except Exception as e:
+                    print(f" -> JSON payload parse notice: {e}")
 
-                item_id = href.strip("/").split("/")[-1]
-                full_id = f"ou_cart_{item_id}"
+            # Strategy 2: HTML Cards fallback
+            if not matches:
+                cards = (
+                    soup.select('a[href*="/item/"]') 
+                    or soup.select('a[href*="/item/detail/"]') 
+                    or soup.select('div[data-testid*="item"]')
+                    or soup.select('a[aria-label*="$"]')
+                    or soup.select('a[data-testid*="listing"]')
+                )
+                print(f" -> Found {len(cards)} raw candidate cards on OfferUp.")
 
-                if full_id in seen_ids:
-                    continue
+                if len(cards) == 0:
+                    print(f" ℹ️ [OfferUp Diagnostic] Page title returned: '{page_title}'")
 
-                full_url = f"https://offerup.com{href}" if href.startswith("/") else href
-                text_content = card.get_text(separator=" ").strip()
-                
-                lines = [line.strip() for line in text_content.split("\n") if line.strip()]
-                if not lines:
-                    continue
+                for card in cards:
+                    href = card.get("href", "") if card.name == "a" else (card.find("a", href=True) or {}).get("href", "")
+                    if not href or "/item/" not in href:
+                        continue
 
-                price = "Check Listing"
-                title = "Golf Cart Listing"
+                    item_id = href.strip("/").split("/")[-1]
+                    full_id = f"ou_cart_{item_id}"
 
-                for line in lines:
-                    if "$" in line and price == "Check Listing":
-                        price = line
-                    elif len(line) > 3 and title == "Golf Cart Listing":
-                        title = line
+                    if full_id in seen_ids:
+                        continue
 
-                # Filter out explicit non-FL state locations
-                full_text_upper = text_content.upper()
-                found_states = re.findall(r',\s*([A-Z]{2})\b', full_text_upper)
-                
-                if found_states and any(state != "FL" for state in found_states):
-                    continue
+                    full_url = f"https://offerup.com{href}" if href.startswith("/") else href
+                    text_content = card.get_text(separator=" ").strip()
+                    
+                    lines = [line.strip() for line in text_content.split("\n") if line.strip()]
+                    if not lines:
+                        continue
 
-                if any(state_name in full_text_upper for state_name in ["KANSAS", "CALIFORNIA", "TEXAS", "NEW YORK"]):
-                    continue
+                    price = "Check Listing"
+                    title = "Golf Cart Listing"
 
-                matches.append({
-                    "id": full_id,
-                    "title": title[:100],
-                    "price": price,
-                    "location": "Tampa/Sarasota Area (OfferUp)",
-                    "link": full_url,
-                    "source": "OfferUp"
-                })
+                    for line in lines:
+                        if "$" in line and price == "Check Listing":
+                            price = line
+                        elif len(line) > 3 and title == "Golf Cart Listing":
+                            title = line
+
+                    full_text_upper = text_content.upper()
+                    found_states = re.findall(r',\s*([A-Z]{2})\b', full_text_upper)
+                    
+                    if found_states and any(state != "FL" for state in found_states):
+                        continue
+
+                    if any(state_name in full_text_upper for state_name in ["KANSAS", "CALIFORNIA", "TEXAS", "NEW YORK"]):
+                        continue
+
+                    matches.append({
+                        "id": full_id,
+                        "title": title[:100],
+                        "price": price,
+                        "location": "Tampa/Sarasota Area (OfferUp)",
+                        "link": full_url,
+                        "source": "OfferUp"
+                    })
+            else:
+                print(f" -> Found {len(matches)} raw candidate listings via OfferUp JSON payload.")
 
             browser.close()
 
