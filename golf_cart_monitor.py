@@ -6,10 +6,16 @@ from email.mime.multipart import MIMEMultipart
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
-# Environment Variables & Configuration
+# ----------------- CONFIGURATION -----------------
 SEARCH_QUERY = "golf cart"
+
+# Local area coordinates for OfferUp search (Tampa / Sarasota, FL)
+LOCAL_LATITUDE = 27.3364
+LOCAL_LONGITUDE = -82.5307
+
+# Search URLs (&delivery_param=p restricts OfferUp to Local Pickup Only)
 NEXTDOOR_SEARCH_URL = f"https://nextdoor.com/for_sale_and_free/?query={SEARCH_QUERY.replace(' ', '%20')}"
-OFFERUP_SEARCH_URL = f"https://offerup.com/search?q={SEARCH_QUERY.replace(' ', '%20')}"
+OFFERUP_SEARCH_URL = f"https://offerup.com/search?q={SEARCH_QUERY.replace(' ', '%20')}&delivery_param=p"
 
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL")
 SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD")
@@ -44,6 +50,7 @@ def scrape_nextdoor(seen_ids):
                 viewport={"width": 1280, "height": 800}
             )
 
+            # Robust Cookie Parser for Playwright
             if NEXTDOOR_SESSION_ID:
                 cookies = []
                 raw_cookie_str = NEXTDOOR_SESSION_ID.strip()
@@ -53,6 +60,7 @@ def scrape_nextdoor(seen_ids):
                         item = item.strip()
                         if not item or "=" not in item:
                             continue
+                        
                         name, val = item.split("=", 1)
                         name, val = name.strip(), val.strip()
 
@@ -77,19 +85,28 @@ def scrape_nextdoor(seen_ids):
                     context.add_cookies(cookies)
 
             page = context.new_page()
+
+            print(f" -> Navigating to Nextdoor search: {NEXTDOOR_SEARCH_URL}")
             page.goto(NEXTDOOR_SEARCH_URL, wait_until="networkidle", timeout=30000)
             page.wait_for_timeout(4000)
 
+            print(f" -> Landed URL: {page.url}")
+            print(f" -> Page Title: {page.title()}")
+
             soup = BeautifulSoup(page.content(), "html.parser")
+
             cards = (
                 soup.select('a[href*="/p/"]')
                 or soup.select('a[href*="/for_sale_and_free/"]')
                 or soup.select('div[data-testid]')
             )
 
+            print(f" -> Found {len(cards)} raw candidate cards on Nextdoor.")
+
             for card in cards:
                 href = card.get("href", "") if card.name == "a" else (card.find("a", href=True) or {}).get("href", "")
                 
+                # Filter out generic search/category pages
                 if not href or href.strip("/") in ["for_sale_and_free", "for_sale_and_free/"] or "query=" in href:
                     continue
 
@@ -98,15 +115,18 @@ def scrape_nextdoor(seen_ids):
                     continue
 
                 full_id = f"nd_cart_{item_id}"
+
                 if full_id in seen_ids:
                     continue
 
                 full_url = f"https://nextdoor.com{href}" if href.startswith("/") else href
+
                 text_content = card.get_text(separator=" ").strip()
                 if not text_content or len(text_content) < 5:
                     continue
 
                 lines = [line.strip() for line in text_content.split("\n") if line.strip()]
+                
                 title = lines[0] if lines else f"Golf Cart Listing ({item_id})"
                 if title.lower() in ["for sale & free", "for sale and free", "search", "nextdoor"]:
                     continue
@@ -141,17 +161,21 @@ def scrape_offerup(seen_ids):
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
+            
+            # Inject Tampa/Sarasota FL coordinates & location permissions
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                viewport={"width": 1280, "height": 800}
+                viewport={"width": 1280, "height": 800},
+                geolocation={"latitude": LOCAL_LATITUDE, "longitude": LOCAL_LONGITUDE},
+                permissions=["geolocation"]
             )
+            
             page = context.new_page()
+            print(f" -> Navigating to OfferUp search: {OFFERUP_SEARCH_URL}")
             page.goto(OFFERUP_SEARCH_URL, wait_until="networkidle", timeout=30000)
             page.wait_for_timeout(3000)
 
             soup = BeautifulSoup(page.content(), "html.parser")
-            
-            # OfferUp listing links contain '/item/detail/'
             cards = soup.select('a[href*="/item/detail/"]')
             print(f" -> Found {len(cards)} raw candidate listings on OfferUp.")
 
@@ -160,7 +184,6 @@ def scrape_offerup(seen_ids):
                 if not href:
                     continue
 
-                # Unique ID extraction from detail path
                 item_id = href.strip("/").split("/")[-1]
                 full_id = f"ou_cart_{item_id}"
 
@@ -183,11 +206,16 @@ def scrape_offerup(seen_ids):
                     elif len(line) > 3 and title == "Golf Cart Listing":
                         title = line
 
+                # Filter out explicit far-state tags (allowing FL)
+                full_text_upper = text_content.upper()
+                if any(far_state in full_text_upper for far_state in [", CA", ", TX", ", NY", "CALIFORNIA"]):
+                    continue
+
                 matches.append({
                     "id": full_id,
                     "title": title[:100],
                     "price": price,
-                    "location": "OfferUp Local Area",
+                    "location": "Tampa/Sarasota Area (OfferUp)",
                     "link": full_url,
                     "source": "OfferUp"
                 })
@@ -202,7 +230,7 @@ def scrape_offerup(seen_ids):
 # ----------------- EMAIL NOTIFICATIONS -----------------
 def send_email_alert(new_matches):
     if not SENDER_EMAIL or not SENDER_PASSWORD or not RECIPIENT_EMAIL:
-        print("Skipping email dispatch: SENDER_EMAIL, SENDER_PASSWORD, or RECIPIENT_EMAIL missing.")
+        print("Skipping email dispatch: Missing email credentials.")
         return
 
     msg = MIMEMultipart("alternative")
@@ -216,6 +244,7 @@ def send_email_alert(new_matches):
         <div style="border: 1px solid #e0e0e0; border-radius: 8px; padding: 15px; margin-bottom: 15px; font-family: Arial, sans-serif;">
             <span style="background-color: #0070f3; color: white; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: bold;">{item['source']}</span>
             <h3 style="margin: 8px 0 5px 0; color: #333;">{item['title']}</h3>
+            <p style="margin: 0 0 5px 0; font-size: 14px; color: #666;">Location: {item['location']}</p>
             <p style="margin: 0 0 10px 0; font-size: 18px; color: #2e7d32; font-weight: bold;">{item['price']}</p>
             <a href="{item['link']}" target="_blank" style="background-color: #2e7d32; color: white; text-decoration: none; padding: 8px 12px; border-radius: 5px; font-weight: bold; display: inline-block;">View Listing</a>
         </div>
@@ -258,7 +287,7 @@ def main():
     for m in ou_matches:
         seen_ids.add(m["id"])
 
-    # 3. Save seen IDs and alert if matches exist
+    # 3. Save seen IDs and send email if matches exist
     if all_new_matches:
         save_seen_ids(seen_ids)
         print(f"\nScan complete. Total new golf cart matches found: {len(all_new_matches)}")
