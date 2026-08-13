@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -50,7 +51,6 @@ def scrape_nextdoor(seen_ids):
                 viewport={"width": 1280, "height": 800}
             )
 
-            # Robust Cookie Parser for Playwright
             if NEXTDOOR_SESSION_ID:
                 cookies = []
                 raw_cookie_str = NEXTDOOR_SESSION_ID.strip()
@@ -90,9 +90,6 @@ def scrape_nextdoor(seen_ids):
             page.goto(NEXTDOOR_SEARCH_URL, wait_until="networkidle", timeout=30000)
             page.wait_for_timeout(4000)
 
-            print(f" -> Landed URL: {page.url}")
-            print(f" -> Page Title: {page.title()}")
-
             soup = BeautifulSoup(page.content(), "html.parser")
 
             cards = (
@@ -106,7 +103,6 @@ def scrape_nextdoor(seen_ids):
             for card in cards:
                 href = card.get("href", "") if card.name == "a" else (card.find("a", href=True) or {}).get("href", "")
                 
-                # Filter out generic search/category pages
                 if not href or href.strip("/") in ["for_sale_and_free", "for_sale_and_free/"] or "query=" in href:
                     continue
 
@@ -154,7 +150,6 @@ def scrape_nextdoor(seen_ids):
     return matches
 
 # ----------------- OFFERUP SCRAPER -----------------
-# ----------------- OFFERUP SCRAPER -----------------
 def scrape_offerup(seen_ids):
     print(f"🏷️  Checking OfferUp for '{SEARCH_QUERY}' listings...")
     matches = []
@@ -163,7 +158,6 @@ def scrape_offerup(seen_ids):
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             
-            # Inject Tampa/Sarasota FL coordinates & location permissions
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
                 viewport={"width": 1280, "height": 800},
@@ -175,14 +169,11 @@ def scrape_offerup(seen_ids):
             print(f" -> Navigating to OfferUp search: {OFFERUP_SEARCH_URL}")
             page.goto(OFFERUP_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
             
-            # Scroll down slightly to trigger lazy-loading of items
             page.wait_for_timeout(3000)
             page.evaluate("window.scrollBy(0, 800)")
             page.wait_for_timeout(3000)
 
             soup = BeautifulSoup(page.content(), "html.parser")
-            
-            # Broader selection across OfferUp listing links and cards
             cards = (
                 soup.select('a[href*="/item/detail/"]') 
                 or soup.select('a[href*="/item/"]') 
@@ -217,9 +208,17 @@ def scrape_offerup(seen_ids):
                     elif len(line) > 3 and title == "Golf Cart Listing":
                         title = line
 
-                # Filter out explicit far-state tags (allowing FL)
+                # STRICT LOCATION FILTERING:
+                # 1. Search text for state codes like ", KS", ", CA", ", TX"
                 full_text_upper = text_content.upper()
-                if any(far_state in full_text_upper for far_state in [", CA", ", TX", ", NY", "CALIFORNIA"]):
+                found_states = re.findall(r',\s*([A-Z]{2})\b', full_text_upper)
+                
+                # If a 2-letter state code is present and it's NOT Florida (FL), skip it!
+                if found_states and any(state != "FL" for state in found_states):
+                    continue
+
+                # 2. Extra safety catch for common non-FL state names
+                if any(state_name in full_text_upper for state_name in ["KANSAS", "CALIFORNIA", "TEXAS", "NEW YORK"]):
                     continue
 
                 matches.append({
