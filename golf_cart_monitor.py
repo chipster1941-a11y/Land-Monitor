@@ -24,7 +24,9 @@ SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD")
 RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL")
 NEXTDOOR_SESSION_ID = os.environ.get("NEXTDOOR_SESSION_ID")
 
-SEEN_IDS_FILE = "seen_ids.json"
+# Absolute path forces seen_ids.json to save in the script's directory
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SEEN_IDS_FILE = os.path.join(SCRIPT_DIR, "seen_ids.json")
 
 def load_seen_ids():
     if os.path.exists(SEEN_IDS_FILE):
@@ -37,7 +39,8 @@ def load_seen_ids():
 
 def save_seen_ids(seen_ids):
     with open(SEEN_IDS_FILE, "w") as f:
-        json.dump(list(seen_ids), f)
+        json.dump(list(seen_ids), f, indent=2)
+    print(f"📁 Tracking file updated at: {SEEN_IDS_FILE}")
 
 # ----------------- NEXTDOOR SCRAPER -----------------
 def scrape_nextdoor(seen_ids):
@@ -160,7 +163,6 @@ def scrape_offerup(seen_ids):
 
     try:
         with sync_playwright() as p:
-            # Stealth browser launch
             browser = p.chromium.launch(
                 headless=True,
                 args=[
@@ -183,7 +185,6 @@ def scrape_offerup(seen_ids):
                 }
             )
 
-            # Pre-inject location cookies for OfferUp
             context.add_cookies([
                 {"name": "ou_zipcode", "value": LOCAL_ZIP, "domain": ".offerup.com", "path": "/"},
                 {"name": "ou_latitude", "value": str(LOCAL_LATITUDE), "domain": ".offerup.com", "path": "/"},
@@ -191,7 +192,6 @@ def scrape_offerup(seen_ids):
             ])
             
             page = context.new_page()
-            # Mask navigator.webdriver automation flag
             page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
             print(f" -> Navigating to OfferUp search: {OFFERUP_SEARCH_URL}")
@@ -210,7 +210,6 @@ def scrape_offerup(seen_ids):
             if next_data_script and next_data_script.string:
                 try:
                     payload = json.loads(next_data_script.string)
-                    # Recursively search for feed items in JSON
                     payload_str = json.dumps(payload)
                     item_ids = set(re.findall(r'"/item/detail/(\d+)"', payload_str) + re.findall(r'"id":"(\d+)"', payload_str))
                     
@@ -356,9 +355,10 @@ def main():
     for m in ou_matches:
         seen_ids.add(m["id"])
 
-    # 3. Save seen IDs and send email if matches exist
+    # Always save seen_ids unconditionally
+    save_seen_ids(seen_ids)
+
     if all_new_matches:
-        save_seen_ids(seen_ids)
         print(f"\nScan complete. Total new golf cart matches found: {len(all_new_matches)}")
         send_email_alert(all_new_matches)
     else:
