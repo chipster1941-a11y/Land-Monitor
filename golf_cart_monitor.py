@@ -10,13 +10,15 @@ from playwright.sync_api import sync_playwright
 # ----------------- CONFIGURATION -----------------
 SEARCH_QUERY = "golf cart"
 
-# Local area coordinates for OfferUp search (Tampa / Sarasota, FL)
+# Tampa/Sarasota FL local targeting
+LOCAL_ZIP = "34236"  # Sarasota, FL area zip code
 LOCAL_LATITUDE = 27.3364
 LOCAL_LONGITUDE = -82.5307
 
-# Search URLs (&delivery_param=p restricts OfferUp to Local Pickup Only)
+# Search URLs
 NEXTDOOR_SEARCH_URL = f"https://nextdoor.com/for_sale_and_free/?query={SEARCH_QUERY.replace(' ', '%20')}"
-OFFERUP_SEARCH_URL = f"https://offerup.com/search?q={SEARCH_QUERY.replace(' ', '%20')}&delivery_param=p"
+# OfferUp search using zip code & radius params
+OFFERUP_SEARCH_URL = f"https://offerup.com/search?q={SEARCH_QUERY.replace(' ', '%20')}&delivery_param=p&zip={LOCAL_ZIP}&radius=30"
 
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL")
 SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD")
@@ -87,7 +89,6 @@ def scrape_nextdoor(seen_ids):
             page = context.new_page()
 
             print(f" -> Navigating to Nextdoor search: {NEXTDOOR_SEARCH_URL}")
-            # Changed wait_until to 'domcontentloaded' to avoid networkidle timeouts
             page.goto(NEXTDOOR_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
             page.wait_for_timeout(4000)
 
@@ -165,20 +166,29 @@ def scrape_offerup(seen_ids):
                 geolocation={"latitude": LOCAL_LATITUDE, "longitude": LOCAL_LONGITUDE},
                 permissions=["geolocation"]
             )
+
+            # Pre-inject location cookies for OfferUp
+            context.add_cookies([
+                {"name": "ou_zipcode", "value": LOCAL_ZIP, "domain": ".offerup.com", "path": "/"},
+                {"name": "ou_latitude", "value": str(LOCAL_LATITUDE), "domain": ".offerup.com", "path": "/"},
+                {"name": "ou_longitude", "value": str(LOCAL_LONGITUDE), "domain": ".offerup.com", "path": "/"}
+            ])
             
             page = context.new_page()
             print(f" -> Navigating to OfferUp search: {OFFERUP_SEARCH_URL}")
             page.goto(OFFERUP_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
             
-            page.wait_for_timeout(3000)
-            page.evaluate("window.scrollBy(0, 800)")
+            page.wait_for_timeout(4000)
+            page.evaluate("window.scrollBy(0, 1000)")
             page.wait_for_timeout(3000)
 
             soup = BeautifulSoup(page.content(), "html.parser")
+            
             cards = (
                 soup.select('a[href*="/item/detail/"]') 
                 or soup.select('a[href*="/item/"]') 
                 or soup.select('div[data-testid*="item"]')
+                or soup.select('a[data-testid*="listing"]')
             )
             print(f" -> Found {len(cards)} raw candidate cards on OfferUp.")
 
