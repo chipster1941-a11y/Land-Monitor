@@ -13,6 +13,7 @@ from curl_cffi import requests as curl_requests
 SEEN_FILE = "seen_properties.txt"
 COUNTIES = ["barron", "polk", "dunn", "washburn"]
 MIN_ACRES = 10
+MAX_PRICE = 200000  # $200,000 budget limit for land/properties
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -30,6 +31,22 @@ CRAIGSLIST_TARGETS = [
     {"url": "https://minneapolis.craigslist.org/search/rea?query=polk", "region": "Polk County"},
     {"url": "https://rmn.craigslist.org/search/rea?query=washburn", "region": "Washburn County"},
 ]
+
+# ==========================================
+# PRICE PARSER HELPER
+# ==========================================
+def parse_price(price_str):
+    """Converts price strings like '$185,000' or '$150k' to numeric floats for budget checks."""
+    if not price_str or price_str.upper() in ["N/A", "CHECK LISTING", "CONTACT AGENT"]:
+        return None
+    cleaned = re.sub(r'[^\d.]', '', price_str.split()[0] if price_str.split() else price_str)
+    try:
+        val = float(cleaned)
+        if 'k' in price_str.lower() and val < 1000:
+            val *= 1000
+        return val
+    except ValueError:
+        return None
 
 # ==========================================
 # SEEN ID MANAGEMENT
@@ -85,6 +102,11 @@ def scrape_craigslist(seen_ids):
 
                 price = price_elem.text.strip() if price_elem else "N/A"
                 location = loc_elem.text.strip() if loc_elem else "WI"
+
+                # Filter by max price ($200k)
+                num_price = parse_price(price)
+                if num_price is not None and num_price > MAX_PRICE:
+                    continue
 
                 # Check if it matches target counties or cabin/acreage keywords
                 title_lower = title.lower()
@@ -143,6 +165,11 @@ def scrape_landwatch(seen_ids):
 
             price_elem = card.select_one(".price") or card.select_one("[class*='price']")
             price = price_elem.text.strip() if price_elem else "N/A"
+
+            # Filter by max price ($200k)
+            num_price = parse_price(price)
+            if num_price is not None and num_price > MAX_PRICE:
+                continue
 
             title_lower = title.lower()
             if any(county in title_lower for county in COUNTIES):
@@ -204,6 +231,11 @@ def scrape_landandfarm(seen_ids):
             price_elem = card.select_one(".price")
             price = price_elem.text.strip() if price_elem else "N/A"
 
+            # Filter by max price ($200k)
+            num_price = parse_price(price)
+            if num_price is not None and num_price > MAX_PRICE:
+                continue
+
             title_lower = title.lower()
             if any(county in title_lower for county in COUNTIES):
                 item = {
@@ -262,7 +294,7 @@ def send_email_alert(matches):
     <html>
       <body>
         <h2 style="color: #27ae60;">🌲 Wisconsin Property Alert</h2>
-        <p>Found <strong>{len(matches)}</strong> new listing(s) matching your criteria:</p>
+        <p>Found <strong>{len(matches)}</strong> new listing(s) matching your criteria (Under $200,000):</p>
         {html_items}
       </body>
     </html>
@@ -293,8 +325,7 @@ def main():
     all_matches.extend(scrape_landwatch(seen_ids))
     all_matches.extend(scrape_landandfarm(seen_ids))
 
-    
-    print(f"\nScan complete. Total matches found: {len(all_matches)}")
+    print(f"\nScan complete. Total matches found under $200,000: {len(all_matches)}")
 
     if all_matches:
         send_email_alert(all_matches)

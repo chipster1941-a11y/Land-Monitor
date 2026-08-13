@@ -12,6 +12,7 @@ from playwright.sync_api import sync_playwright
 # ==========================================
 TARGET_COUNTIES = ["barron", "polk", "dunn"]
 KEY_WORDS = ["cabin", "cottage", "lake", "waterfront", "lakefront", "river", "shore"]
+MAX_CABIN_PRICE = 300000  # $300,000 maximum budget cap for cabins
 
 # Craigslist subdomains covering Barron, Polk, & Dunn
 CRAIGSLIST_SITES = [
@@ -29,11 +30,31 @@ REALTOR_URLS = [
 SEEN_FILE = "seen_cabins.txt"
 
 # Environment variables for email
-EMAIL_SENDER = os.environ.get("EMAIL_SENDER")
-EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
-EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER")
+EMAIL_SENDER = os.environ.get("SENDER_EMAIL") or os.environ.get("EMAIL_SENDER")
+EMAIL_PASSWORD = os.environ.get("SENDER_PASSWORD") or os.environ.get("EMAIL_PASSWORD")
+EMAIL_RECEIVER = os.environ.get("RECIPIENT_EMAIL") or os.environ.get("EMAIL_RECEIVER")
 
 
+# ==========================================
+# PRICE PARSER HELPER
+# ==========================================
+def parse_price(price_str):
+    """Converts price strings like '$249,900' or '$280k' to numeric floats for budget checks."""
+    if not price_str or price_str.upper() in ["N/A", "CHECK LISTING", "CONTACT AGENT"]:
+        return None
+    cleaned = re.sub(r'[^\d.]', '', price_str.split()[0] if price_str.split() else price_str)
+    try:
+        val = float(cleaned)
+        if 'k' in price_str.lower() and val < 1000:
+            val *= 1000
+        return val
+    except ValueError:
+        return None
+
+
+# ==========================================
+# SEEN ID MANAGEMENT
+# ==========================================
 def load_seen_ids():
     if not os.path.exists(SEEN_FILE):
         return set()
@@ -88,6 +109,11 @@ def scrape_craigslist(seen_ids):
 
                 price_elem = post.find("span", class_="price") or post.find("span", class_="property-price")
                 price = price_elem.text.strip() if price_elem else "N/A"
+
+                # Filter by max cabin price ($300,000)
+                num_price = parse_price(price)
+                if num_price is not None and num_price > MAX_CABIN_PRICE:
+                    continue
 
                 text_to_check = (title + " " + link).lower()
                 has_keyword = any(kw in text_to_check for kw in KEY_WORDS)
@@ -157,6 +183,11 @@ def scrape_realtor(seen_ids):
                         price_elem = card.select_one('span[data-label="pc-price"]') or card.select_one('div[data-testid="card-price"]')
                         price = price_elem.text.strip() if price_elem else "N/A"
 
+                        # Filter by max cabin price ($300,000)
+                        num_price = parse_price(price)
+                        if num_price is not None and num_price > MAX_CABIN_PRICE:
+                            continue
+
                         title_elem = card.select_one('div[data-label="property-address"]') or card.select_one('div[data-testid="card-address"]')
                         title = title_elem.text.strip() if title_elem else f"Waterfront Home in {county}"
 
@@ -204,7 +235,7 @@ def send_email_alert(matches):
         <h2 style="background-color: #1e3a8a; color: white; padding: 12px; border-radius: 6px; text-align: center;">
             🏡 New Lake Cabin Alert ({count})
         </h2>
-        <p>The following new lake cabin/waterfront listing(s) were found in Barron, Polk, or Dunn County:</p>
+        <p>The following new lake cabin/waterfront listing(s) under $300,000 were found in Barron, Polk, or Dunn County:</p>
         <hr style="border: 0; border-top: 1px solid #ccc;">
     """
 
@@ -258,7 +289,7 @@ def main():
     all_matches.extend(scrape_craigslist(seen_ids))
     all_matches.extend(scrape_realtor(seen_ids))
 
-    print(f"\nScan complete. Total new cabin matches found: {len(all_matches)}")
+    print(f"\nScan complete. Total new cabin matches found (under $300,000): {len(all_matches)}")
 
     if all_matches:
         send_email_alert(all_matches)
