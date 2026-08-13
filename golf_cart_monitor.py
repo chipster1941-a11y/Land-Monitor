@@ -87,7 +87,8 @@ def scrape_nextdoor(seen_ids):
             page = context.new_page()
 
             print(f" -> Navigating to Nextdoor search: {NEXTDOOR_SEARCH_URL}")
-            page.goto(NEXTDOOR_SEARCH_URL, wait_until="networkidle", timeout=30000)
+            # Changed wait_until to 'domcontentloaded' to avoid networkidle timeouts
+            page.goto(NEXTDOOR_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
             page.wait_for_timeout(4000)
 
             soup = BeautifulSoup(page.content(), "html.parser")
@@ -208,16 +209,13 @@ def scrape_offerup(seen_ids):
                     elif len(line) > 3 and title == "Golf Cart Listing":
                         title = line
 
-                # STRICT LOCATION FILTERING:
-                # 1. Search text for state codes like ", KS", ", CA", ", TX"
+                # Filter out explicit non-FL state locations
                 full_text_upper = text_content.upper()
                 found_states = re.findall(r',\s*([A-Z]{2})\b', full_text_upper)
                 
-                # If a 2-letter state code is present and it's NOT Florida (FL), skip it!
                 if found_states and any(state != "FL" for state in found_states):
                     continue
 
-                # 2. Extra safety catch for common non-FL state names
                 if any(state_name in full_text_upper for state_name in ["KANSAS", "CALIFORNIA", "TEXAS", "NEW YORK"]):
                     continue
 
