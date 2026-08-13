@@ -154,6 +154,7 @@ def scrape_nextdoor(seen_ids):
     return matches
 
 # ----------------- OFFERUP SCRAPER -----------------
+# ----------------- OFFERUP SCRAPER -----------------
 def scrape_offerup(seen_ids):
     print(f"🏷️  Checking OfferUp for '{SEARCH_QUERY}' listings...")
     matches = []
@@ -172,16 +173,26 @@ def scrape_offerup(seen_ids):
             
             page = context.new_page()
             print(f" -> Navigating to OfferUp search: {OFFERUP_SEARCH_URL}")
-            page.goto(OFFERUP_SEARCH_URL, wait_until="networkidle", timeout=30000)
+            page.goto(OFFERUP_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
+            
+            # Scroll down slightly to trigger lazy-loading of items
+            page.wait_for_timeout(3000)
+            page.evaluate("window.scrollBy(0, 800)")
             page.wait_for_timeout(3000)
 
             soup = BeautifulSoup(page.content(), "html.parser")
-            cards = soup.select('a[href*="/item/detail/"]')
-            print(f" -> Found {len(cards)} raw candidate listings on OfferUp.")
+            
+            # Broader selection across OfferUp listing links and cards
+            cards = (
+                soup.select('a[href*="/item/detail/"]') 
+                or soup.select('a[href*="/item/"]') 
+                or soup.select('div[data-testid*="item"]')
+            )
+            print(f" -> Found {len(cards)} raw candidate cards on OfferUp.")
 
             for card in cards:
-                href = card.get("href", "")
-                if not href:
+                href = card.get("href", "") if card.name == "a" else (card.find("a", href=True) or {}).get("href", "")
+                if not href or "/item/" not in href:
                     continue
 
                 item_id = href.strip("/").split("/")[-1]
