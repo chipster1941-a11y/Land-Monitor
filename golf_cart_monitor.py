@@ -1,42 +1,37 @@
 import os
+import json
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
-# ==========================================
-# CONFIGURATION
-# ==========================================
+# Environment Variables & Configuration
 SEARCH_QUERY = "golf cart"
 NEXTDOOR_SEARCH_URL = f"https://nextdoor.com/for_sale_and_free/?query={SEARCH_QUERY.replace(' ', '%20')}"
+OFFERUP_SEARCH_URL = f"https://offerup.com/search?q={SEARCH_QUERY.replace(' ', '%20')}"
 
-SEEN_FILE = "seen_carts.txt"
+SENDER_EMAIL = os.environ.get("SENDER_EMAIL")
+SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD")
+RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL")
+NEXTDOOR_SESSION_ID = os.environ.get("NEXTDOOR_SESSION_ID")
 
-# Email environment variables (matching existing secret names)
-EMAIL_SENDER = os.environ.get("SENDER_EMAIL") or os.environ.get("EMAIL_SENDER")
-EMAIL_PASSWORD = os.environ.get("SENDER_PASSWORD") or os.environ.get("EMAIL_PASSWORD")
-EMAIL_RECEIVER = os.environ.get("RECIPIENT_EMAIL") or os.environ.get("EMAIL_RECEIVER")
-
-# Nextdoor Session Cookie (from environment variable / secret)
-NEXTDOOR_SESSION_ID = os.environ.get("NEXTDOOR_SESSION_ID", "")
-
+SEEN_IDS_FILE = "seen_ids.json"
 
 def load_seen_ids():
-    if not os.path.exists(SEEN_FILE):
-        return set()
-    with open(SEEN_FILE, "r") as f:
-        return set(line.strip() for line in f if line.strip())
+    if os.path.exists(SEEN_IDS_FILE):
+        try:
+            with open(SEEN_IDS_FILE, "r") as f:
+                return set(json.load(f))
+        except Exception:
+            return set()
+    return set()
 
+def save_seen_ids(seen_ids):
+    with open(SEEN_IDS_FILE, "w") as f:
+        json.dump(list(seen_ids), f)
 
-def save_seen_id(item_id):
-    with open(SEEN_FILE, "a") as f:
-        f.write(f"{item_id}\n")
-
-
-# ==========================================
-# SCRAPER: NEXTDOOR VIA PLAYWRIGHT
-# ==========================================
+# ----------------- NEXTDOOR SCRAPER -----------------
 def scrape_nextdoor(seen_ids):
     print(f"🛒 Checking Nextdoor for '{SEARCH_QUERY}' listings...")
     matches = []
@@ -44,13 +39,11 @@ def scrape_nextdoor(seen_ids):
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
                 viewport={"width": 1280, "height": 800}
             )
 
-            # Robust Cookie Parser for Playwright
             if NEXTDOOR_SESSION_ID:
                 cookies = []
                 raw_cookie_str = NEXTDOOR_SESSION_ID.strip()
@@ -60,10 +53,8 @@ def scrape_nextdoor(seen_ids):
                         item = item.strip()
                         if not item or "=" not in item:
                             continue
-                        
                         name, val = item.split("=", 1)
-                        name = name.strip()
-                        val = val.strip()
+                        name, val = name.strip(), val.strip()
 
                         if not name or name.lower() in ["path", "domain", "expires", "secure", "httponly", "samesite"]:
                             continue
@@ -86,48 +77,36 @@ def scrape_nextdoor(seen_ids):
                     context.add_cookies(cookies)
 
             page = context.new_page()
-
-            print(f" -> Navigating to Nextdoor search: {NEXTDOOR_SEARCH_URL}")
             page.goto(NEXTDOOR_SEARCH_URL, wait_until="networkidle", timeout=30000)
             page.wait_for_timeout(4000)
 
-            print(f" -> Landed URL: {page.url}")
-            print(f" -> Page Title: {page.title()}")
-
             soup = BeautifulSoup(page.content(), "html.parser")
-
-            # Look for explicit item links or card wrappers
-            cards = soup.select('a[href*="/p/"]') or soup.select('a[href*="/for_sale_and_free/"]') or soup.select('div[data-testid]')
-
-            print(f" -> Found {len(cards)} raw candidate cards on page.")
+            cards = (
+                soup.select('a[href*="/p/"]')
+                or soup.select('a[href*="/for_sale_and_free/"]')
+                or soup.select('div[data-testid]')
+            )
 
             for card in cards:
                 href = card.get("href", "") if card.name == "a" else (card.find("a", href=True) or {}).get("href", "")
                 
-                # Filter out generic search/category pages (e.g. exactly '/for_sale_and_free/' or pure query URLs)
                 if not href or href.strip("/") in ["for_sale_and_free", "for_sale_and_free/"] or "query=" in href:
                     continue
 
                 item_id = href.strip("/").split("/")[-1]
-                
-                # Skip if item_id is generic
                 if item_id in ["for_sale_and_free", "finds"]:
                     continue
 
                 full_id = f"nd_cart_{item_id}"
-
                 if full_id in seen_ids:
                     continue
 
                 full_url = f"https://nextdoor.com{href}" if href.startswith("/") else href
-
                 text_content = card.get_text(separator=" ").strip()
                 if not text_content or len(text_content) < 5:
                     continue
 
                 lines = [line.strip() for line in text_content.split("\n") if line.strip()]
-                
-                # Filter out generic UI headings
                 title = lines[0] if lines else f"Golf Cart Listing ({item_id})"
                 if title.lower() in ["for sale & free", "for sale and free", "search", "nextdoor"]:
                     continue
@@ -138,106 +117,154 @@ def scrape_nextdoor(seen_ids):
                         price = line
                         break
 
-                item_data = {
+                matches.append({
                     "id": full_id,
                     "title": title[:100],
                     "price": price,
                     "location": "Nextdoor Local Area",
                     "link": full_url,
                     "source": "Nextdoor"
-                }
-
-                matches.append(item_data)
-                seen_ids.add(full_id)
-                save_seen_id(full_id)
+                })
 
             browser.close()
 
     except Exception as e:
-        print(f"Error executing Playwright for Nextdoor: {e}")
+        print(f"Error checking Nextdoor: {e}")
 
     return matches
 
+# ----------------- OFFERUP SCRAPER -----------------
+def scrape_offerup(seen_ids):
+    print(f"🏷️  Checking OfferUp for '{SEARCH_QUERY}' listings...")
+    matches = []
 
-# ==========================================
-# EMAIL NOTIFICATIONS
-# ==========================================
-def send_email_alert(matches):
-    if not EMAIL_SENDER or not EMAIL_PASSWORD or not EMAIL_RECEIVER:
-        print("Email credentials missing. Skipping email send.")
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                viewport={"width": 1280, "height": 800}
+            )
+            page = context.new_page()
+            page.goto(OFFERUP_SEARCH_URL, wait_until="networkidle", timeout=30000)
+            page.wait_for_timeout(3000)
+
+            soup = BeautifulSoup(page.content(), "html.parser")
+            
+            # OfferUp listing links contain '/item/detail/'
+            cards = soup.select('a[href*="/item/detail/"]')
+            print(f" -> Found {len(cards)} raw candidate listings on OfferUp.")
+
+            for card in cards:
+                href = card.get("href", "")
+                if not href:
+                    continue
+
+                # Unique ID extraction from detail path
+                item_id = href.strip("/").split("/")[-1]
+                full_id = f"ou_cart_{item_id}"
+
+                if full_id in seen_ids:
+                    continue
+
+                full_url = f"https://offerup.com{href}" if href.startswith("/") else href
+                text_content = card.get_text(separator=" ").strip()
+                
+                lines = [line.strip() for line in text_content.split("\n") if line.strip()]
+                if not lines:
+                    continue
+
+                price = "Check Listing"
+                title = "Golf Cart Listing"
+
+                for line in lines:
+                    if "$" in line and price == "Check Listing":
+                        price = line
+                    elif len(line) > 3 and title == "Golf Cart Listing":
+                        title = line
+
+                matches.append({
+                    "id": full_id,
+                    "title": title[:100],
+                    "price": price,
+                    "location": "OfferUp Local Area",
+                    "link": full_url,
+                    "source": "OfferUp"
+                })
+
+            browser.close()
+
+    except Exception as e:
+        print(f"Error checking OfferUp: {e}")
+
+    return matches
+
+# ----------------- EMAIL NOTIFICATIONS -----------------
+def send_email_alert(new_matches):
+    if not SENDER_EMAIL or not SENDER_PASSWORD or not RECIPIENT_EMAIL:
+        print("Skipping email dispatch: SENDER_EMAIL, SENDER_PASSWORD, or RECIPIENT_EMAIL missing.")
         return
 
-    count = len(matches)
-    first_match = matches[0]
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = f"🚨 {len(new_matches)} New Golf Cart Listing(s) Found!"
+    msg["From"] = SENDER_EMAIL
+    msg["To"] = RECIPIENT_EMAIL
 
-    subject = f"🛺 Golf Cart Alert: {first_match['price']} | {first_match['title']}"
-    if count > 1:
-        subject = f"🛺 {count} New Golf Cart Listings Found on Nextdoor!"
-
-    html_content = f"""
-    <html>
-    <body style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto;">
-        <h2 style="background-color: #15803d; color: white; padding: 12px; border-radius: 6px; text-align: center;">
-            🛺 New Golf Cart Alert ({count})
-        </h2>
-        <p>The following new golf cart listing(s) were found on Nextdoor:</p>
-        <hr style="border: 0; border-top: 1px solid #ccc;">
-    """
-
-    for item in matches:
-        html_content += f"""
-        <div style="border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 16px; background-color: #f8fafc;">
-            <span style="background-color: #16a34a; color: white; padding: 3px 8px; font-size: 12px; border-radius: 4px; font-weight: bold;">
-                {item['source']}
-            </span>
-            <h3 style="margin: 10px 0 5px 0; color: #0f172a;">{item['title']}</h3>
-            <p style="margin: 4px 0;"><strong>Price:</strong> <span style="color: #16a34a; font-weight: bold;">{item['price']}</span></p>
-            <p style="margin: 4px 0;"><strong>Area:</strong> {item['location']}</p>
-            <p style="margin: 12px 0 0 0;">
-                <a href="{item['link']}" target="_blank" style="background-color: #15803d; color: white; text-decoration: none; padding: 8px 14px; border-radius: 5px; font-size: 14px; display: inline-block;">
-                    View on Nextdoor &rarr;
-                </a>
-            </p>
+    html_items = ""
+    for item in new_matches:
+        html_items += f"""
+        <div style="border: 1px solid #e0e0e0; border-radius: 8px; padding: 15px; margin-bottom: 15px; font-family: Arial, sans-serif;">
+            <span style="background-color: #0070f3; color: white; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: bold;">{item['source']}</span>
+            <h3 style="margin: 8px 0 5px 0; color: #333;">{item['title']}</h3>
+            <p style="margin: 0 0 10px 0; font-size: 18px; color: #2e7d32; font-weight: bold;">{item['price']}</p>
+            <a href="{item['link']}" target="_blank" style="background-color: #2e7d32; color: white; text-decoration: none; padding: 8px 12px; border-radius: 5px; font-weight: bold; display: inline-block;">View Listing</a>
         </div>
         """
 
-    html_content += """
-        <p style="font-size: 12px; color: #64748b; text-align: center; margin-top: 24px;">
-            Nextdoor Golf Cart Monitor • Automated GitHub Action
-        </p>
-    </body>
+    html_content = f"""
+    <html>
+      <body>
+        <h2>🎯 New Golf Cart Matches</h2>
+        {html_items}
+      </body>
     </html>
     """
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = EMAIL_SENDER
-    msg["To"] = EMAIL_RECEIVER
     msg.attach(MIMEText(html_content, "html"))
 
     try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-            server.sendmail(EMAIL_SENDER, EMAIL_RECEIVER, msg.as_string())
-        print(f"Email alert sent successfully for {count} golf cart match(es)!")
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.starttls()
+            server.login(SENDER_EMAIL, SENDER_PASSWORD)
+            server.sendmail(SENDER_EMAIL, [RECIPIENT_EMAIL], msg.as_string())
+        print(f"Email alert sent successfully for {len(new_matches)} golf cart match(es)!")
     except Exception as e:
         print(f"Failed to send email alert: {e}")
 
-
-# ==========================================
-# MAIN RUNNER
-# ==========================================
+# ----------------- MAIN RUNNER -----------------
 def main():
     seen_ids = load_seen_ids()
-    all_matches = scrape_nextdoor(seen_ids)
+    all_new_matches = []
 
-    print(f"\nScan complete. Total new golf cart matches found: {len(all_matches)}")
+    # 1. Scrape Nextdoor
+    nd_matches = scrape_nextdoor(seen_ids)
+    all_new_matches.extend(nd_matches)
+    for m in nd_matches:
+        seen_ids.add(m["id"])
 
-    if all_matches:
-        send_email_alert(all_matches)
+    # 2. Scrape OfferUp
+    ou_matches = scrape_offerup(seen_ids)
+    all_new_matches.extend(ou_matches)
+    for m in ou_matches:
+        seen_ids.add(m["id"])
+
+    # 3. Save seen IDs and alert if matches exist
+    if all_new_matches:
+        save_seen_ids(seen_ids)
+        print(f"\nScan complete. Total new golf cart matches found: {len(all_new_matches)}")
+        send_email_alert(all_new_matches)
     else:
-        print("No new golf cart listings found on this run.")
-
+        print("\nScan complete. No new golf cart listings found across Nextdoor or OfferUp.")
 
 if __name__ == "__main__":
     main()
