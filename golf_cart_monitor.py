@@ -65,7 +65,6 @@ def scrape_nextdoor(seen_ids):
                         name = name.strip()
                         val = val.strip()
 
-                        # Skip invalid/empty cookie names or standard HTTP attributes
                         if not name or name.lower() in ["path", "domain", "expires", "secure", "httponly", "samesite"]:
                             continue
 
@@ -76,7 +75,6 @@ def scrape_nextdoor(seen_ids):
                             "path": "/"
                         })
                 else:
-                    # Single token fallback
                     cookies.append({
                         "name": "ndp_session",
                         "value": raw_cookie_str,
@@ -93,27 +91,29 @@ def scrape_nextdoor(seen_ids):
             page.goto(NEXTDOOR_SEARCH_URL, wait_until="networkidle", timeout=30000)
             page.wait_for_timeout(4000)
 
-            # DIAGNOSTICS
             print(f" -> Landed URL: {page.url}")
             print(f" -> Page Title: {page.title()}")
 
             soup = BeautifulSoup(page.content(), "html.parser")
 
-            cards = (
-                soup.select('a[href*="/for_sale_and_free/"]')
-                or soup.select('a[href*="/p/"]')
-                or soup.select('a[href*="/finds/"]')
-                or soup.select('div[data-testid]')
-            )
+            # Look for explicit item links or card wrappers
+            cards = soup.select('a[href*="/p/"]') or soup.select('a[href*="/for_sale_and_free/"]') or soup.select('div[data-testid]')
 
             print(f" -> Found {len(cards)} raw candidate cards on page.")
 
             for card in cards:
-                href = card.get("href", "")
-                if not href:
+                href = card.get("href", "") if card.name == "a" else (card.find("a", href=True) or {}).get("href", "")
+                
+                # Filter out generic search/category pages (e.g. exactly '/for_sale_and_free/' or pure query URLs)
+                if not href or href.strip("/") in ["for_sale_and_free", "for_sale_and_free/"] or "query=" in href:
                     continue
 
                 item_id = href.strip("/").split("/")[-1]
+                
+                # Skip if item_id is generic
+                if item_id in ["for_sale_and_free", "finds"]:
+                    continue
+
                 full_id = f"nd_cart_{item_id}"
 
                 if full_id in seen_ids:
@@ -126,7 +126,11 @@ def scrape_nextdoor(seen_ids):
                     continue
 
                 lines = [line.strip() for line in text_content.split("\n") if line.strip()]
+                
+                # Filter out generic UI headings
                 title = lines[0] if lines else f"Golf Cart Listing ({item_id})"
+                if title.lower() in ["for sale & free", "for sale and free", "search", "nextdoor"]:
+                    continue
 
                 price = "Check Listing"
                 for line in lines:
