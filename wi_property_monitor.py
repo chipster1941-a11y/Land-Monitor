@@ -1,42 +1,47 @@
 import os
 import re
+import csv
 import smtplib
+import urllib.parse
+from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-import requests
 from bs4 import BeautifulSoup
 from curl_cffi import requests as curl_requests
+from playwright.sync_api import sync_playwright
 
 # ==========================================
-# CONFIGURATION & CONSTANTS
+# CONFIGURATION
 # ==========================================
-SEEN_FILE = "seen_properties.txt"
-COUNTIES = ["barron", "polk", "dunn", "washburn"]
-MIN_ACRES = 10
-MAX_PRICE = 200000  # $200,000 budget limit for land/properties
+TARGET_COUNTIES = ["barron", "polk", "dunn"]
+KEY_WORDS = ["land", "acre", "acres", "acreage", "lot", "parcel", "waterfront", "river"]
+MAX_LAND_PRICE = 200000  # $200,000 max budget for land
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1",
-    "Referer": "https://www.google.com/"
-}
-
-# Craigslist Search Configs
-CRAIGSLIST_TARGETS = [
-    {"url": "https://eauclaire.craigslist.org/search/rea?query=barron+dunn", "region": "Barron & Dunn Counties"},
-    {"url": "https://minneapolis.craigslist.org/search/rea?query=polk", "region": "Polk County"},
-    {"url": "https://rmn.craigslist.org/search/rea?query=washburn", "region": "Washburn County"},
+CRAIGSLIST_SITES = [
+    {"name": "Eau Claire", "url": "https://eauclaire.craigslist.org/search/rea?query=land"},
+    {"name": "Minneapolis / St. Paul", "url": "https://minneapolis.craigslist.org/search/rea?query=land"}
 ]
 
+REALTOR_URLS = [
+    {"county": "Barron County", "url": "https://www.realtor.com/realestateandhomes-search/Barron-County_WI/type-land"},
+    {"county": "Polk County", "url": "https://www.realtor.com/realestateandhomes-search/Polk-County_WI/type-land"},
+    {"county": "Dunn County", "url": "https://www.realtor.com/realestateandhomes-search/Dunn-County_WI/type-land"}
+]
+
+SEEN_FILE = "seen_properties.txt"
+CSV_FILE = "matched_properties.csv"
+
+# Environment variables for email
+EMAIL_SENDER = os.environ.get("SENDER_EMAIL") or os.environ.get("EMAIL_SENDER")
+EMAIL_PASSWORD = os.environ.get("SENDER_PASSWORD") or os.environ.get("EMAIL_PASSWORD")
+EMAIL_RECEIVER = os.environ.get("RECIPIENT_EMAIL") or os.environ.get("EMAIL_RECEIVER")
+
+
 # ==========================================
-# PRICE PARSER HELPER
+# HELPERS
 # ==========================================
 def parse_price(price_str):
-    """Converts price strings like '$185,000' or '$150k' to numeric floats for budget checks."""
+    """Converts price strings like '$150,000' to numeric floats."""
     if not price_str or price_str.upper() in ["N/A", "CHECK LISTING", "CONTACT AGENT"]:
         return None
     cleaned = re.sub(r'[^\d.]', '', price_str.split()[0] if price_str.split() else price_str)
@@ -48,271 +53,291 @@ def parse_price(price_str):
     except ValueError:
         return None
 
-# ==========================================
-# SEEN ID MANAGEMENT
-# ==========================================
+
 def load_seen_ids():
     if not os.path.exists(SEEN_FILE):
         return set()
     with open(SEEN_FILE, "r") as f:
         return set(line.strip() for line in f if line.strip())
 
-def save_seen_id(listing_id):
+
+def save_seen_id(post_id):
     with open(SEEN_FILE, "a") as f:
-        f.write(f"{listing_id}\n")
+        f.write(f"{post_id}\n")
+
+
+def save_to_csv(matches, filename=CSV_FILE):
+    """Appends new matches to a local CSV log."""
+    if not matches:
+        return
+
+    file_exists = os.path.exists(filename)
+    fieldnames = ["date_found", "source", "price", "title", "location", "link", "id"]
+
+    with open(filename, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        if not file_exists:
+            writer.writeheader()
+
+        today_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        for item in matches:
+            writer.writerow({
+                "date_found": today_str,
+                "source": item.get("source", ""),
+                "price": item.get("price", ""),
+                "title": item.get("title", ""),
+                "location": item.get("location", ""),
+                "link": item.get("link", ""),
+                "id": item.get("id", "")
+            })
+    print(f"Logged {len(matches)} property listing(s) to {filename}")
+
 
 # ==========================================
 # SCRAPER 1: CRAIGSLIST
 # ==========================================
 def scrape_craigslist(seen_ids):
-    print("\n[1/3] Checking Craigslist...")
+    print("[1/2] Checking Craigslist for Land/Acreage...")
     matches = []
 
-    for target in CRAIGSLIST_TARGETS:
+    for site in CRAIGSLIST_SITES:
+        print(f" -> Querying {site['name']} Craigslist...")
         try:
-            res = requests.get(target["url"], headers=HEADERS, timeout=10)
+            res = curl_requests.get(site["url"], impersonate="chrome120", timeout=15)
             if res.status_code != 200:
                 continue
 
             soup = BeautifulSoup(res.text, "html.parser")
-            results = soup.select("li.cl-static-search-result") or soup.select("ol.cl-static-search-results li")
+            postings = soup.find_all("li", class_="cl-search-result")
 
-            for result in results:
-                a_elem = result.select_one("a")
-                if not a_elem or not a_elem.get("href"):
+            for post in postings:
+                post_id = post.get("data-pid")
+                if not post_id:
+                    a_tag = post.find("a", href=True)
+                    if a_tag:
+                        match = re.search(r"/(\d+)\.html", a_tag["href"])
+                        if match:
+                            post_id = match.group(1)
+
+                if not post_id:
                     continue
 
-                link = a_elem.get("href")
-                if link.startswith("/"):
-                    link = "https://www.craigslist.org" + link
-
-                title_elem = result.select_one(".title") or a_elem
-                title = title_elem.text.strip() if title_elem else "No Title"
-
-                post_id_match = re.search(r'/(\d+)\.html', link)
-                if not post_id_match:
-                    continue
-                post_id = f"cl_{post_id_match.group(1)}"
-
-                if post_id in seen_ids:
+                full_id = f"cl_land_{post_id}"
+                if full_id in seen_ids:
                     continue
 
-                price_elem = result.select_one(".price")
-                loc_elem = result.select_one(".location")
+                title_elem = post.find("a", class_="title") or post.find("a", class_="posting-title") or post.find("a")
+                title = title_elem.text.strip() if title_elem else "WI Land Parcel"
+                link = title_elem["href"] if title_elem and title_elem.has_attr("href") else ""
 
+                price_elem = post.find("span", class_="price") or post.find("span", class_="property-price")
                 price = price_elem.text.strip() if price_elem else "N/A"
-                location = loc_elem.text.strip() if loc_elem else "WI"
 
-                # Filter by max price ($200k)
                 num_price = parse_price(price)
-                if num_price is not None and num_price > MAX_PRICE:
+                if num_price is not None and num_price > MAX_LAND_PRICE:
                     continue
 
-                # Check if it matches target counties or cabin/acreage keywords
-                title_lower = title.lower()
-                if any(c in title_lower for c in COUNTIES) or any(kw in title_lower for kw in ["cabin", "lake", "acre", "farm", "land"]):
+                text_to_check = (title + " " + link).lower()
+                has_keyword = any(kw in text_to_check for kw in KEY_WORDS)
+                has_county = any(c in text_to_check for c in TARGET_COUNTIES)
+
+                if has_keyword or has_county:
+                    # Extract thumbnail image
+                    img_elem = post.find("img")
+                    image_url = img_elem["src"] if img_elem and img_elem.has_attr("src") else ""
+
+                    # Create Google Maps URL
+                    search_query = urllib.parse.quote(f"{title}, {site['name']} WI")
+                    map_url = f"https://www.google.com/maps/search/?api=1&query={search_query}"
+
                     item = {
-                        "id": post_id,
+                        "id": full_id,
                         "title": title,
                         "price": price,
-                        "location": location,
+                        "location": f"WI Land ({site['name']})",
                         "link": link,
-                        "source": "Craigslist"
+                        "source": "Craigslist",
+                        "image_url": image_url,
+                        "map_url": map_url
                     }
                     matches.append(item)
-                    seen_ids.add(post_id)
-                    save_seen_id(post_id)
+                    seen_ids.add(full_id)
+                    save_seen_id(full_id)
 
         except Exception as e:
-            print(f"Error scraping Craigslist target ({target['region']}): {e}")
+            print(f"Error scraping Craigslist {site['name']}: {e}")
 
     return matches
 
+
 # ==========================================
-# SCRAPER 2: LANDWATCH
+# SCRAPER 2: REALTOR.COM
 # ==========================================
-def scrape_landwatch(seen_ids):
-    print("[2/3] Checking LandWatch...")
+def scrape_realtor(seen_ids):
+    print("[2/2] Checking Realtor.com via Playwright...")
     matches = []
 
-    url = "https://www.landwatch.com/wisconsin-land-for-sale/acres-10-plus"
-
     try:
-        # impersonate="chrome120" spoofs Chrome's real TLS fingerprint to defeat Cloudflare
-        res = curl_requests.get(url, impersonate="chrome120", timeout=15)
-        
-        if res.status_code != 200:
-            print(f"LandWatch request returned status {res.status_code}")
-            return matches
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
 
-        soup = BeautifulSoup(res.text, "html.parser")
-        listings = soup.select("div[data-record-id]") or soup.select(".listing-card") or soup.select("article")
+            for item in REALTOR_URLS:
+                county = item["county"]
+                url = item["url"]
+                print(f" -> Scanning {county} land listings...")
 
-        for card in listings:
-            card_id = card.get("data-record-id") or card.get("id")
-            if not card_id:
-                continue
+                try:
+                    page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    page.wait_for_timeout(3000)
 
-            post_id = f"lw_{card_id}"
-            if post_id in seen_ids:
-                continue
+                    soup = BeautifulSoup(page.content(), "html.parser")
+                    cards = soup.select('div[id^="card-"]') or soup.select('li[data-testid="result-card"]') or soup.select('div[data-testid="property-card"]')
 
-            title_elem = card.select_one("a[title]") or card.select_one(".title") or card.select_one("h2")
-            title = title_elem.text.strip() if title_elem else "WI Land Listing"
+                    for card in cards:
+                        card_id = card.get("id") or card.get("data-property-id")
+                        if not card_id:
+                            continue
 
-            link_elem = card.select_one("a[href]")
-            link = "https://www.landwatch.com" + link_elem["href"] if link_elem and link_elem["href"].startswith("/") else (link_elem["href"] if link_elem else "")
+                        full_id = f"realtor_{card_id}"
+                        if full_id in seen_ids:
+                            continue
 
-            price_elem = card.select_one(".price") or card.select_one("[class*='price']")
-            price = price_elem.text.strip() if price_elem else "N/A"
+                        link_elem = card.select_one('a[href*="/realestateandhomes-detail/"]') or card.select_one('a[aria-label]')
+                        if not link_elem or not link_elem.get("href"):
+                            continue
 
-            # Filter by max price ($200k)
-            num_price = parse_price(price)
-            if num_price is not None and num_price > MAX_PRICE:
-                continue
+                        rel_href = link_elem["href"]
+                        link = f"https://www.realtor.com{rel_href}" if rel_href.startswith("/") else rel_href
 
-            title_lower = title.lower()
-            if any(county in title_lower for county in COUNTIES):
-                item = {
-                    "id": post_id,
-                    "title": title,
-                    "price": price,
-                    "location": "WI Target County",
-                    "link": link,
-                    "source": "LandWatch"
-                }
-                matches.append(item)
-                seen_ids.add(post_id)
-                save_seen_id(post_id)
+                        price_elem = card.select_one('span[data-label="pc-price"]') or card.select_one('div[data-testid="card-price"]')
+                        price = price_elem.text.strip() if price_elem else "N/A"
+
+                        num_price = parse_price(price)
+                        if num_price is not None and num_price > MAX_LAND_PRICE:
+                            continue
+
+                        title_elem = card.select_one('div[data-label="property-address"]') or card.select_one('div[data-testid="card-address"]')
+                        title = title_elem.text.strip() if title_elem else f"Land Lot in {county}"
+
+                        # Extract image URL
+                        img_elem = card.select_one('img[src*="http"]') or card.select_one('img')
+                        image_url = ""
+                        if img_elem:
+                            image_url = img_elem.get("src") or img_elem.get("data-src") or ""
+
+                        # Create Google Maps URL
+                        search_query = urllib.parse.quote(f"{title}, {county}, WI")
+                        map_url = f"https://www.google.com/maps/search/?api=1&query={search_query}"
+
+                        item_data = {
+                            "id": full_id,
+                            "title": title,
+                            "price": price,
+                            "location": f"{county}, WI",
+                            "link": link,
+                            "source": "Realtor.com",
+                            "image_url": image_url,
+                            "map_url": map_url
+                        }
+                        matches.append(item_data)
+                        seen_ids.add(full_id)
+                        save_seen_id(full_id)
+
+                except Exception as e:
+                    print(f"Error loading Realtor page for {county}: {e}")
+
+            browser.close()
 
     except Exception as e:
-        print(f"Error scraping LandWatch: {e}")
+        print(f"Error executing Playwright for Realtor.com: {e}")
 
     return matches
 
-# ==========================================
-# SCRAPER 3: LANDANDFARM
-# ==========================================
-def scrape_landandfarm(seen_ids):
-    print("[3/3] Checking LandAndFarm...")
-    matches = []
-
-    url = "https://www.landandfarm.com/search/wisconsin-land-for-sale/"
-
-    try:
-        res = requests.get(url, headers=HEADERS, timeout=12)
-        if res.status_code != 200:
-            return matches
-
-        soup = BeautifulSoup(res.text, "html.parser")
-        cards = soup.select(".property-card") or soup.select("article")
-
-        for card in cards:
-            link_elem = card.select_one("a[href]")
-            if not link_elem:
-                continue
-
-            link = link_elem["href"]
-            if link.startswith("/"):
-                link = "https://www.landandfarm.com" + link
-
-            # Extract numeric ID from link
-            id_match = re.search(r'/(\d+)/?$', link)
-            if not id_match:
-                continue
-
-            post_id = f"laf_{id_match.group(1)}"
-            if post_id in seen_ids:
-                continue
-
-            title_elem = card.select_one(".title") or card.select_one("h2") or link_elem
-            title = title_elem.text.strip() if title_elem else "Wisconsin Farm/Land"
-
-            price_elem = card.select_one(".price")
-            price = price_elem.text.strip() if price_elem else "N/A"
-
-            # Filter by max price ($200k)
-            num_price = parse_price(price)
-            if num_price is not None and num_price > MAX_PRICE:
-                continue
-
-            title_lower = title.lower()
-            if any(county in title_lower for county in COUNTIES):
-                item = {
-                    "id": post_id,
-                    "title": title,
-                    "price": price,
-                    "location": "WI Target County",
-                    "link": link,
-                    "source": "LandAndFarm"
-                }
-                matches.append(item)
-                seen_ids.add(post_id)
-                save_seen_id(post_id)
-
-    except Exception as e:
-        print(f"Error scraping LandAndFarm: {e}")
-
-    return matches
 
 # ==========================================
-# EMAIL ALERT FUNCTION
+# EMAIL NOTIFICATIONS
 # ==========================================
 def send_email_alert(matches):
-    sender = os.getenv("SENDER_EMAIL") or os.getenv("EMAIL_SENDER")
-    password = os.getenv("SENDER_PASSWORD") or os.getenv("EMAIL_PASSWORD")
-    receiver = os.getenv("RECIPIENT_EMAIL") or os.getenv("EMAIL_RECEIVER")
-
-    if not sender or not password or not receiver:
-        print("Email credentials missing in environment variables. Skipping email notification.")
+    if not EMAIL_SENDER or not EMAIL_PASSWORD or not EMAIL_RECEIVER:
+        print("Email credentials missing. Skipping email send.")
         return
 
-    # Build Dynamic Subject Line
-    if len(matches) == 1:
-        item = matches[0]
-        acres_match = re.search(r'(\d+\.?\d*)\s*(?:-\s*)?acres?', item['title'], re.IGNORECASE)
-        acres_str = f"{acres_match.group(1)} Acres" if acres_match else "Property"
-        subject = f"🌲 WI Alert: {item['price']} | {acres_str} | {item['source']} - {item['title'][:35]}..."
-    else:
-        prices = [m['price'] for m in matches if m['price'] != "N/A"]
-        price_range = f" ({min(prices)} - {max(prices)})" if prices else ""
-        subject = f"🌲 WI Alert: {len(matches)} New Property Listings{price_range}"
+    count = len(matches)
+    first_match = matches[0]
 
-    # Build HTML Email Body
-    html_items = ""
+    subject = f"🌾 Land Alert: {first_match['price']} | {first_match['title']}"
+    if count > 1:
+        subject = f"🌾 {count} New Land Listings Found!"
+
+    html_content = f"""
+    <html>
+    <body style="font-family: Arial, sans-serif; background-color: #f1f5f9; padding: 20px 10px; color: #333;">
+        <div style="max-width: 600px; margin: auto; background-color: #ffffff; border-radius: 8px; padding: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.08);">
+            <h2 style="background-color: #15803d; color: white; padding: 14px; border-radius: 6px; text-align: center; margin-top: 0;">
+                🌾 New Land / Acreage Alert ({count})
+            </h2>
+            <p style="color: #475569; font-size: 14px;">The following new land listing(s) under $200,000 were found:</p>
+            <hr style="border: 0; border-top: 1px solid #e2e8f0; margin-bottom: 20px;">
+    """
+
     for item in matches:
-        html_items += f"""
-        <div style="border: 1px solid #ddd; padding: 15px; margin-bottom: 15px; border-radius: 8px; font-family: sans-serif;">
-            <h3 style="margin-top: 0; color: #2c3e50;">{item['title']}</h3>
-            <p><strong>Price:</strong> <span style="color: #27ae60; font-size: 1.1em;">{item['price']}</span></p>
-            <p><strong>Source:</strong> {item['source']} | <strong>Location:</strong> {item['location']}</p>
-            <p><a href="{item['link']}" target="_blank" style="background-color: #2980b9; color: white; padding: 8px 12px; text-decoration: none; border-radius: 4px; display: inline-block;">View Listing</a></p>
+        img_src = item.get("image_url") or "https://via.placeholder.com/150?text=No+Photo"
+
+        html_content += f"""
+        <div style="border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 20px; background-color: #f8fafc;">
+            <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                <tr>
+                    <td width="130" valign="top" style="padding-right: 14px;">
+                        <img src="{img_src}" alt="Property" width="120" height="90" style="border-radius: 6px; object-fit: cover; display: block; border: 1px solid #cbd5e1;">
+                    </td>
+                    <td valign="top">
+                        <span style="background-color: #16a34a; color: white; padding: 2px 8px; font-size: 11px; border-radius: 4px; font-weight: bold; text-transform: uppercase;">
+                            {item['source']}
+                        </span>
+                        <h3 style="margin: 6px 0 4px 0; color: #0f172a; font-size: 16px; line-height: 1.2;">{item['title']}</h3>
+                        <p style="margin: 2px 0; font-size: 14px;"><strong>Price:</strong> <span style="color: #16a34a; font-weight: bold;">{item['price']}</span></p>
+                        <p style="margin: 2px 0; font-size: 13px; color: #64748b;"><strong>Area:</strong> {item['location']}</p>
+                    </td>
+                </tr>
+            </table>
+
+            <div style="margin-top: 14px; padding-top: 12px; border-top: 1px solid #e2e8f0; display: flex; gap: 8px;">
+                <a href="{item['link']}" target="_blank" style="background-color: #15803d; color: white; text-decoration: none; padding: 8px 14px; border-radius: 5px; font-size: 13px; font-weight: bold; inline-block;">
+                    View Listing &rarr;
+                </a>
+                <a href="{item['map_url']}" target="_blank" style="background-color: #475569; color: white; text-decoration: none; padding: 8px 14px; border-radius: 5px; font-size: 13px; inline-block;">
+                    📍 Google Maps
+                </a>
+            </div>
         </div>
         """
 
-    html_body = f"""
-    <html>
-      <body>
-        <h2 style="color: #27ae60;">🌲 Wisconsin Property Alert</h2>
-        <p>Found <strong>{len(matches)}</strong> new listing(s) matching your criteria (Under $200,000):</p>
-        {html_items}
-      </body>
+    html_content += """
+            <p style="font-size: 12px; color: #94a3b8; text-align: center; margin-top: 24px;">
+                WI Land Property Monitor • Automated GitHub Action
+            </p>
+        </div>
+    </body>
     </html>
     """
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"] = sender
-    msg["To"] = receiver
-    msg.attach(MIMEText(html_body, "html"))
+    msg["From"] = EMAIL_SENDER
+    msg["To"] = EMAIL_RECEIVER
+    msg.attach(MIMEText(html_content, "html"))
 
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(sender, password)
-            server.sendmail(sender, receiver, msg.as_string())
-        print(f"Successfully sent email alert! Subject: {subject}")
+            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+            server.sendmail(EMAIL_SENDER, EMAIL_RECEIVER, msg.as_string())
+        print(f"Email alert sent successfully for {count} land match(es)!")
     except Exception as e:
-        print(f"Failed to send email: {e}")
+        print(f"Failed to send email alert: {e}")
+
 
 # ==========================================
 # MAIN RUNNER
@@ -322,15 +347,16 @@ def main():
 
     all_matches = []
     all_matches.extend(scrape_craigslist(seen_ids))
-    all_matches.extend(scrape_landwatch(seen_ids))
-    all_matches.extend(scrape_landandfarm(seen_ids))
+    all_matches.extend(scrape_realtor(seen_ids))
 
-    print(f"\nScan complete. Total matches found under $200,000: {len(all_matches)}")
+    print(f"\nScan complete. Total new land matches found: {len(all_matches)}")
 
     if all_matches:
+        save_to_csv(all_matches, CSV_FILE)
         send_email_alert(all_matches)
     else:
-        print("No new property listings found on this run.")
+        print("No new land listings found on this run.")
+
 
 if __name__ == "__main__":
     main()
