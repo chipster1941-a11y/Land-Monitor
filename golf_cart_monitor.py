@@ -46,25 +46,52 @@ def scrape_nextdoor(seen_ids):
             browser = p.chromium.launch(headless=True)
 
             context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
                 viewport={"width": 1280, "height": 800}
             )
 
-            # Set Nextdoor session cookies for multiple domain variations
+            # Robust Cookie Parser for Playwright
             if NEXTDOOR_SESSION_ID:
                 cookies = []
-                for domain in [".nextdoor.com", "nextdoor.com", "www.nextdoor.com"]:
-                    cookies.extend([
-                        {"name": "ndp_session", "value": NEXTDOOR_SESSION_ID, "domain": domain, "path": "/"},
-                        {"name": "sessionid", "value": NEXTDOOR_SESSION_ID, "domain": domain, "path": "/"}
-                    ])
-                context.add_cookies(cookies)
+                raw_cookie_str = NEXTDOOR_SESSION_ID.strip()
+
+                if "=" in raw_cookie_str:
+                    for item in raw_cookie_str.split(";"):
+                        item = item.strip()
+                        if not item or "=" not in item:
+                            continue
+                        
+                        name, val = item.split("=", 1)
+                        name = name.strip()
+                        val = val.strip()
+
+                        # Skip invalid/empty cookie names or standard HTTP attributes
+                        if not name or name.lower() in ["path", "domain", "expires", "secure", "httponly", "samesite"]:
+                            continue
+
+                        cookies.append({
+                            "name": name,
+                            "value": val,
+                            "domain": ".nextdoor.com",
+                            "path": "/"
+                        })
+                else:
+                    # Single token fallback
+                    cookies.append({
+                        "name": "ndp_session",
+                        "value": raw_cookie_str,
+                        "domain": ".nextdoor.com",
+                        "path": "/"
+                    })
+
+                if cookies:
+                    context.add_cookies(cookies)
 
             page = context.new_page()
 
             print(f" -> Navigating to Nextdoor search: {NEXTDOOR_SEARCH_URL}")
             page.goto(NEXTDOOR_SEARCH_URL, wait_until="networkidle", timeout=30000)
-            page.wait_for_timeout(4000)  # Extra buffer for dynamic JS elements
+            page.wait_for_timeout(4000)
 
             # DIAGNOSTICS
             print(f" -> Landed URL: {page.url}")
@@ -72,12 +99,12 @@ def scrape_nextdoor(seen_ids):
 
             soup = BeautifulSoup(page.content(), "html.parser")
 
-            # Broader selector search across candidate links and listing cards
-            all_links = soup.find_all("a", href=True)
-            candidate_hrefs = [a['href'] for a in all_links if any(x in a['href'] for x in ['/for_sale_and_free/', '/p/', '/finds/', '/item/'])]
-            print(f" -> Diagnostic: Found {len(all_links)} total links, {len(candidate_hrefs)} listing candidate links.")
-
-            cards = soup.select('a[href*="/for_sale_and_free/"]') or soup.select('a[href*="/p/"]') or soup.select('a[href*="/finds/"]') or soup.select('div[data-testid]')
+            cards = (
+                soup.select('a[href*="/for_sale_and_free/"]')
+                or soup.select('a[href*="/p/"]')
+                or soup.select('a[href*="/finds/"]')
+                or soup.select('div[data-testid]')
+            )
 
             print(f" -> Found {len(cards)} raw candidate cards on page.")
 
@@ -86,7 +113,6 @@ def scrape_nextdoor(seen_ids):
                 if not href:
                     continue
 
-                # Extract listing ID
                 item_id = href.strip("/").split("/")[-1]
                 full_id = f"nd_cart_{item_id}"
 
