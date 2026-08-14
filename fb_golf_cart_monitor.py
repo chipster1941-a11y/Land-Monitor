@@ -110,8 +110,14 @@ def scrape_facebook_marketplace(headless=True):
             print("="*60 + "\n")
             input("Press ENTER after completing login...")
 
-        # Scroll down to load dynamic Marketplace listings
-        page.wait_for_timeout(3000)
+        # Wait specifically for Marketplace item links to load into the DOM
+        try:
+            print("Waiting for Marketplace listing cards to load...")
+            page.wait_for_selector('a[href*="/marketplace/item/"]', timeout=15000)
+        except Exception as e:
+            print(f"Warning: Timed out waiting for listing cards: {e}")
+
+        # Scroll down to trigger lazy-loading of thumbnail images & extra cards
         for _ in range(3):
             page.mouse.wheel(0, 1000)
             page.wait_for_timeout(1500)
