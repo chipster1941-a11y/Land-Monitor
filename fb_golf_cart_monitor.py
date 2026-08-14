@@ -136,6 +136,10 @@ def scrape_facebook_marketplace(headless=True):
             page.mouse.wheel(0, 1000)
             page.wait_for_timeout(2000)
 
+            # Save a screenshot to inspect what GitHub Actions sees
+        page.screenshot(path="fb_debug.png", full_page=True)
+        print("Debug screenshot saved as fb_debug.png")
+
         soup = BeautifulSoup(page.content(), "html.parser")
         
         # Marketplace listings are rendered as anchor tags linking to /item/

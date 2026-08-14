@@ -43,6 +43,13 @@ jobs:
           RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
         run: python fb_golf_cart_monitor.py || true
 
+      - name: Upload Debug Screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fb-marketplace-debug
+          path: fb_debug.png
+
       - name: Commit and push updated tracking files & session
         run: |
           git config --global user.name 'github-actions[bot]'
