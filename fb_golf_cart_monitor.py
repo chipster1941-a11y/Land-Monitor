@@ -88,16 +88,25 @@ def scrape_facebook_marketplace(headless=True):
     print(f"Launching Playwright (Headless: {headless})...")
 
     with sync_playwright() as p:
-        # Launch persistent context to preserve logged-in session
+        # Launch persistent context to preserve logged-in session with stealth flags
         context = p.chromium.launch_persistent_context(
             user_data_dir=USER_DATA_DIR,
             headless=headless,
             viewport={"width": 1280, "height": 800},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-setuid-sandbox"
+            ]
         )
 
         page = context.pages[0] if context.pages else context.new_page()
-        print(f"Navigating to Facebook Marketplace...")
+
+        # Extra stealth: mask the navigator.webdriver property
+        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+
+        print("Navigating to Facebook Marketplace...")
         page.goto(FB_MARKETPLACE_URL, wait_until="domcontentloaded", timeout=45000)
 
         # If running in setup mode (headed), pause to allow manual log in
