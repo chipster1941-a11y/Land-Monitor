@@ -2,121 +2,114 @@ import os
 import re
 import csv
 import smtplib
-import urllib.parse
-from datetime import datetime
-from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
-# ==========================================
-# CONFIGURATION
-# ==========================================
-# Update with your target location and search query
-# Example search URL filtered for "golf cart" near Eau Claire / Twin Cities
+# --- CONFIGURATION ---
 FB_MARKETPLACE_URL = "https://www.facebook.com/marketplace/tampa/search?query=golf%20cart"
-
-MAX_GOLF_CART_PRICE = 7000  # Set your budget cap (e.g., $7,000)
-USER_DATA_DIR = "./fb_user_data"  # Folder where persistent login cookies are stored
-
 SEEN_FILE = "seen_golf_carts.txt"
 CSV_FILE = "matched_golf_carts.csv"
 
-# Email environment variables
-EMAIL_SENDER = os.environ.get("SENDER_EMAIL") or os.environ.get("EMAIL_SENDER")
-EMAIL_PASSWORD = os.environ.get("SENDER_PASSWORD") or os.environ.get("EMAIL_PASSWORD")
-EMAIL_RECEIVER = os.environ.get("RECIPIENT_EMAIL") or os.environ.get("EMAIL_RECEIVER")
+# Keyword and Price Filtering
+KEYWORDS = ["golf cart", "golf cart", "ezgo", "club car", "yamaha", "icon", "evolution"]
+EXCLUDE_KEYWORDS = ["wanted", "looking for", "parts only", "tire", "battery", "charger", "cover", "windshield"]
+MAX_PRICE = 5000  # Adjust maximum budget here
 
-
-# ==========================================
-# HELPERS & TRACKING
-# ==========================================
-def parse_price(price_str):
-    if not price_str or "FREE" in price_str.upper():
-        return 0.0
-    cleaned = re.sub(r'[^\d.]', '', price_str.split()[0] if price_str.split() else price_str)
-    try:
-        return float(cleaned)
-    except ValueError:
-        return None
-
+# Email Configuration from Environment Variables
+SENDER_EMAIL = os.environ.get("SENDER_EMAIL")
+SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD")
+RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL")
 
 def load_seen_ids():
-    if not os.path.exists(SEEN_FILE):
-        return set()
-    with open(SEEN_FILE, "r") as f:
-        return set(line.strip() for line in f if line.strip())
+    if os.path.exists(SEEN_FILE):
+        with open(SEEN_FILE, "r") as f:
+            return set(line.strip() for line in f if line.strip())
+    return set()
 
-
-def save_seen_id(post_id):
+def save_seen_id(item_id):
     with open(SEEN_FILE, "a") as f:
-        f.write(f"{post_id}\n")
+        f.write(f"{item_id}\n")
 
-
-def save_to_csv(matches, filename=CSV_FILE):
-    if not matches:
-        return
-    file_exists = os.path.exists(filename)
-    fieldnames = ["date_found", "source", "price", "title", "location", "link", "id"]
-
-    with open(filename, "a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+def save_to_csv(item_id, title, price, url):
+    file_exists = os.path.exists(CSV_FILE)
+    with open(CSV_FILE, "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
         if not file_exists:
-            writer.writeheader()
+            writer.writerow(["ID", "Title", "Price", "URL"])
+        writer.writerow([item_id, title, price, url])
 
-        today_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        for item in matches:
-            writer.writerow({
-                "date_found": today_str,
-                "source": item.get("source", "Facebook Marketplace"),
-                "price": item.get("price", ""),
-                "title": item.get("title", ""),
-                "location": item.get("location", ""),
-                "link": item.get("link", ""),
-                "id": item.get("id", "")
-            })
-    print(f"Logged {len(matches)} golf cart listing(s) to {filename}")
+def send_email_alert(new_matches):
+    if not SENDER_EMAIL or not SENDER_PASSWORD or not RECIPIENT_EMAIL:
+        print("Email credentials not fully set. Skipping email alert.")
+        return
 
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = f"🚨 {len(new_matches)} New Golf Cart Listing(s) Found!"
+    msg["From"] = SENDER_EMAIL
+    msg["To"] = RECIPIENT_EMAIL
 
-# ==========================================
-# FACEBOOK MARKETPLACE SCRAPER
-# ==========================================
-def scrape_facebook_marketplace(headless=True):
+    html_content = "<h2>New Golf Cart Matches Found:</h2><ul>"
+    for item in new_matches:
+        html_content += f"""
+        <li>
+            <strong><a href="{item['url']}">{item['title']}</a></strong> - ${item['price']}<br>
+            <a href="{item['url']}">View Listing on Facebook Marketplace</a>
+        </li><br>
+        """
+    html_content += "</ul>"
+
+    msg.attach(MIMEText(html_content, "html"))
+
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(SENDER_EMAIL, SENDER_PASSWORD)
+            server.sendmail(SENDER_EMAIL, RECIPIENT_EMAIL, msg.as_string())
+        print(f"Successfully sent email notification for {len(new_matches)} items.")
+    except Exception as e:
+        print(f"Error sending email: {e}")
+
+def scrape_facebook():
     seen_ids = load_seen_ids()
-    matches = []
+    new_matches = []
 
+    headless = os.environ.get("CI") == "true" or os.environ.get("HEADLESS") == "true"
     print(f"Launching Playwright (Headless: {headless})...")
 
     with sync_playwright() as p:
-        # Launch persistent context to preserve logged-in session
-        context = p.chromium.launch_persistent_context(
-            user_data_dir=USER_DATA_DIR,
+        browser = p.chromium.launch(
             headless=headless,
-            viewport={"width": 1280, "height": 800},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-setuid-sandbox"
+            ]
         )
 
-        page = context.pages[0] if context.pages else context.new_page()
-        print(f"Navigating to Facebook Marketplace...")
+        # Load session state from portable JSON file if present
+        context_args = {
+            "viewport": {"width": 1280, "height": 800},
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+        }
+        if os.path.exists("storage_state.json"):
+            print("Loaded logged-in session from storage_state.json")
+            context_args["storage_state"] = "storage_state.json"
+        else:
+            print("Warning: storage_state.json not found. Proceeding without session cookies.")
+
+        context = browser.new_context(**context_args)
+        page = context.new_page()
+
+        # Mask navigator.webdriver property
+        page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+
+        print("Navigating to Facebook Marketplace...")
         page.goto(FB_MARKETPLACE_URL, wait_until="domcontentloaded", timeout=45000)
-
-        # If running in setup mode (headed), pause to allow manual log in
-        if not headless:
-            print("\n" + "="*60)
-            print("MANUAL LOGIN MODE:")
-            print("1. Log into your Facebook account in the opened browser window.")
-            print("2. Set your desired location/radius on Marketplace if needed.")
-            print("3. Press ENTER in this terminal once logged in to continue.")
-            print("="*60 + "\n")
-            input("Press ENTER after completing login...")
-
-        # Navigate to URL
-        page.goto(FB_MARKETPLACE_URL, wait_until="domcontentloaded", timeout=30000)
         page.wait_for_timeout(3000)
 
-        # Handle potential cookie or location overlays
+        # Dismiss potential cookie or location overlays
         try:
-            # Dismiss typical FB popups if present
             close_btn = page.query_selector('div[aria-label="Close"], button:has-text("Allow"), button:has-text("Decline")')
             if close_btn:
                 close_btn.click()
@@ -124,7 +117,6 @@ def scrape_facebook_marketplace(headless=True):
         except Exception:
             pass
 
-        # Wait for either Marketplace items OR main content container to load
         print("Waiting for page content to populate...")
         try:
             page.wait_for_selector('a[href*="/marketplace/item/"], div[role="main"]', timeout=10000)
@@ -136,189 +128,52 @@ def scrape_facebook_marketplace(headless=True):
             page.mouse.wheel(0, 1000)
             page.wait_for_timeout(2000)
 
-            # Save a screenshot to inspect what GitHub Actions sees
+        # Save debug screenshot for artifact inspection
         page.screenshot(path="fb_debug.png", full_page=True)
         print("Debug screenshot saved as fb_debug.png")
 
         soup = BeautifulSoup(page.content(), "html.parser")
-        
-        # Marketplace listings are rendered as anchor tags linking to /item/
-        listing_anchors = soup.select('a[href*="/marketplace/item/"]')
-        print(f"Found {len(listing_anchors)} raw listing cards on page.")
+        browser.close()
 
-        for a in listing_anchors:
-            href = a.get("href", "")
-            # Extract unique Facebook item ID
-            id_match = re.search(r"/item/(\d+)", href)
-            if not id_match:
-                continue
+    # Parse listing links
+    cards = soup.find_all("a", href=re.compile(r"/marketplace/item/\d+"))
+    print(f"Found {len(cards)} raw listing cards on page.")
 
-            item_id = id_match.group(1)
-            full_id = f"fb_cart_{item_id}"
+    for card in cards:
+        href = card.get("href", "")
+        match = re.search(r"/marketplace/item/(\d+)", href)
+        if not match:
+            continue
 
-            if full_id in seen_ids:
-                continue
+        item_id = match.group(1)
+        if item_id in seen_ids:
+            continue
 
-            link = f"https://www.facebook.com/marketplace/item/{item_id}/" if not href.startswith("http") else href
+        full_url = f"https://www.facebook.com/marketplace/item/{item_id}/"
+        text_content = card.get_text(separator=" ").strip()
 
-            # Extract card text blocks
-            card_text = a.get_text(separator="\n").split("\n")
-            card_text = [t.strip() for t in card_text if t.strip()]
+        # Price parsing
+        price_match = re.search(r"\$([0-9,]+)", text_content)
+        price = int(price_match.group(1).replace(",", "")) if price_match else 0
 
-            if not card_text:
-                continue
+        # Title parsing
+        title = text_content.replace(f"${price}", "").strip() if price else text_content
+        title_lower = title.lower()
 
-            # Parse price and title from card text lines
-            price_str = "N/A"
-            title = "Golf Cart Listing"
-            location = "Facebook Marketplace"
+        # Keyword matching and filtering
+        if any(kw in title_lower for kw in KEYWORDS) and not any(ex in title_lower for ex in EXCLUDE_KEYWORDS):
+            if price == 0 or price <= MAX_PRICE:
+                print(f"✨ Match Found: {title} | ${price} | {full_url}")
+                new_matches.append({"id": item_id, "title": title, "price": price, "url": full_url})
+                save_seen_id(item_id)
+                seen_ids.add(item_id)
+                save_to_csv(item_id, title, price, full_url)
 
-            for line in card_text:
-                if line.startswith("$") or "FREE" in line.upper():
-                    price_str = line
-                    break
-
-            # Filter out non-price header strings for title
-            filtered_lines = [l for l in card_text if l != price_str and not l.startswith("$")]
-            if filtered_lines:
-                title = filtered_lines[0]
-            if len(filtered_lines) > 1:
-                location = filtered_lines[1]
-
-            # Price Budget Filter
-            num_price = parse_price(price_str)
-            if num_price is not None and num_price > MAX_GOLF_CART_PRICE:
-                continue
-
-            # Extract thumbnail photo
-            img_elem = a.find("img")
-            image_url = img_elem.get("src", "") if img_elem else ""
-
-            # Maps URL lookup for location
-            search_query = urllib.parse.quote(f"{title}, {location}")
-            map_url = f"https://www.google.com/maps/search/?api=1&query={search_query}"
-
-            item = {
-                "id": full_id,
-                "title": title,
-                "price": price_str,
-                "location": location,
-                "link": link,
-                "source": "Facebook Marketplace",
-                "image_url": image_url,
-                "map_url": map_url
-            }
-
-            matches.append(item)
-            seen_ids.add(full_id)
-            save_seen_id(full_id)
-
-        context.close()
-
-    return matches
-
-
-# ==========================================
-# EMAIL NOTIFICATIONS
-# ==========================================
-def send_email_alert(matches):
-    if not EMAIL_SENDER or not EMAIL_PASSWORD or not EMAIL_RECEIVER:
-        print("Email credentials missing. Skipping email send.")
-        return
-
-    count = len(matches)
-    first_match = matches[0]
-
-    subject = f"🛒 Golf Cart Alert: {first_match['price']} | {first_match['title']}"
-    if count > 1:
-        subject = f"🛒 {count} New Golf Cart Listings Found!"
-
-    html_content = f"""
-    <html>
-    <body style="font-family: Arial, sans-serif; background-color: #f1f5f9; padding: 20px 10px; color: #333;">
-        <div style="max-width: 600px; margin: auto; background-color: #ffffff; border-radius: 8px; padding: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.08);">
-            <h2 style="background-color: #2563eb; color: white; padding: 14px; border-radius: 6px; text-align: center; margin-top: 0;">
-                🛒 Facebook Golf Cart Alert ({count})
-            </h2>
-            <p style="color: #475569; font-size: 14px;">New golf cart listings found on Facebook Marketplace under ${MAX_GOLF_CART_PRICE:,}:</p>
-            <hr style="border: 0; border-top: 1px solid #e2e8f0; margin-bottom: 20px;">
-    """
-
-    for item in matches:
-        img_src = item.get("image_url") or "https://via.placeholder.com/150?text=No+Photo"
-
-        html_content += f"""
-        <div style="border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 20px; background-color: #f8fafc;">
-            <table width="100%" border="0" cellspacing="0" cellpadding="0">
-                <tr>
-                    <td width="130" valign="top" style="padding-right: 14px;">
-                        <img src="{img_src}" alt="Golf Cart" width="120" height="90" style="border-radius: 6px; object-fit: cover; display: block; border: 1px solid #cbd5e1;">
-                    </td>
-                    <td valign="top">
-                        <span style="background-color: #2563eb; color: white; padding: 2px 8px; font-size: 11px; border-radius: 4px; font-weight: bold; text-transform: uppercase;">
-                            {item['source']}
-                        </span>
-                        <h3 style="margin: 6px 0 4px 0; color: #0f172a; font-size: 16px; line-height: 1.2;">{item['title']}</h3>
-                        <p style="margin: 2px 0; font-size: 14px;"><strong>Price:</strong> <span style="color: #16a34a; font-weight: bold;">{item['price']}</span></p>
-                        <p style="margin: 2px 0; font-size: 13px; color: #64748b;"><strong>Location:</strong> {item['location']}</p>
-                    </td>
-                </tr>
-            </table>
-
-            <div style="margin-top: 14px; padding-top: 12px; border-top: 1px solid #e2e8f0; display: flex; gap: 8px;">
-                <a href="{item['link']}" target="_blank" style="background-color: #2563eb; color: white; text-decoration: none; padding: 8px 14px; border-radius: 5px; font-size: 13px; font-weight: bold; inline-block;">
-                    View on FB &rarr;
-                </a>
-                <a href="{item['map_url']}" target="_blank" style="background-color: #475569; color: white; text-decoration: none; padding: 8px 14px; border-radius: 5px; font-size: 13px; inline-block;">
-                    📍 Google Maps
-                </a>
-            </div>
-        </div>
-        """
-
-    html_content += """
-            <p style="font-size: 12px; color: #94a3b8; text-align: center; margin-top: 24px;">
-                Facebook Marketplace Golf Cart Monitor
-            </p>
-        </div>
-    </body>
-    </html>
-    """
-
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = EMAIL_SENDER
-    msg["To"] = EMAIL_RECEIVER
-    msg.attach(MIMEText(html_content, "html"))
-
-    try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-            server.sendmail(EMAIL_SENDER, EMAIL_RECEIVER, msg.as_string())
-        print(f"Email alert sent successfully for {count} golf cart match(es)!")
-    except Exception as e:
-        print(f"Failed to send email alert: {e}")
-
-
-# ==========================================
-# MAIN RUNNER
-# ==========================================
-if __name__ == "__main__":
-    # Check if persistent context directory exists to determine mode
-    has_session = os.path.exists(USER_DATA_DIR) and len(os.listdir(USER_DATA_DIR)) > 0
-
-    if not has_session:
-        print("No saved Facebook session found.")
-        print("Running ONE-TIME setup mode with visible browser...")
-        matches = scrape_facebook_marketplace(headless=False)
-    else:
-        print("Saved session found. Running automated headless scrape...")
-        matches = scrape_facebook_marketplace(headless=True)
-
-    print(f"\nScan complete. Total new golf cart matches found: {len(matches)}")
-
-    if matches:
-        save_to_csv(matches, CSV_FILE)
-        send_email_alert(matches)
+    print(f"\nScan complete. Total new golf cart matches found: {len(new_matches)}")
+    if new_matches:
+        send_email_alert(new_matches)
     else:
         print("No new golf cart listings found on this run.")
+
+if __name__ == "__main__":
+    scrape_facebook()
