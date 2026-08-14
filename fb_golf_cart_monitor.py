@@ -14,7 +14,7 @@ from playwright.sync_api import sync_playwright
 # ==========================================
 # Update with your target location and search query
 # Example search URL filtered for "golf cart" near Eau Claire / Twin Cities
-FB_MARKETPLACE_URL = "https://www.facebook.com/marketplace/tampa/search?query=golf%20cart"
+FB_MARKETPLACE_URL = "https://www.facebook.com/marketplace/tampa/search?query=golf%20cart&exact=false&radius=60"
 
 MAX_GOLF_CART_PRICE = 5000  # Set your budget cap (e.g., $5,000)
 USER_DATA_DIR = "./fb_user_data"  # Folder where persistent login cookies are stored
