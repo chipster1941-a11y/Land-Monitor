@@ -16,7 +16,7 @@ from playwright.sync_api import sync_playwright
 # Example search URL filtered for "golf cart" near Eau Claire / Twin Cities
 FB_MARKETPLACE_URL = "https://www.facebook.com/marketplace/tampa/search?query=golf%20cart&exact=false&radius=60"
 
-MAX_GOLF_CART_PRICE = 5000  # Set your budget cap (e.g., $5,000)
+MAX_GOLF_CART_PRICE = 7000  # Set your budget cap (e.g., $7,000)
 USER_DATA_DIR = "./fb_user_data"  # Folder where persistent login cookies are stored
 
 SEEN_FILE = "seen_golf_carts.txt"
@@ -110,17 +110,31 @@ def scrape_facebook_marketplace(headless=True):
             print("="*60 + "\n")
             input("Press ENTER after completing login...")
 
-        # Wait specifically for Marketplace item links to load into the DOM
-        try:
-            print("Waiting for Marketplace listing cards to load...")
-            page.wait_for_selector('a[href*="/marketplace/item/"]', timeout=15000)
-        except Exception as e:
-            print(f"Warning: Timed out waiting for listing cards: {e}")
+        # Navigate to URL
+        page.goto(FB_MARKETPLACE_URL, wait_until="domcontentloaded", timeout=30000)
+        page.wait_for_timeout(3000)
 
-        # Scroll down to trigger lazy-loading of thumbnail images & extra cards
-        for _ in range(3):
+        # Handle potential cookie or location overlays
+        try:
+            # Dismiss typical FB popups if present
+            close_btn = page.query_selector('div[aria-label="Close"], button:has-text("Allow"), button:has-text("Decline")')
+            if close_btn:
+                close_btn.click()
+                page.wait_for_timeout(1000)
+        except Exception:
+            pass
+
+        # Wait for either Marketplace items OR main content container to load
+        print("Waiting for page content to populate...")
+        try:
+            page.wait_for_selector('a[href*="/marketplace/item/"], div[role="main"]', timeout=10000)
+        except Exception as e:
+            print(f"Selector wait timed out, proceeding to scroll fallback: {e}")
+
+        # Scroll to trigger lazy loading of cards & thumbnails
+        for _ in range(4):
             page.mouse.wheel(0, 1000)
-            page.wait_for_timeout(1500)
+            page.wait_for_timeout(2000)
 
         soup = BeautifulSoup(page.content(), "html.parser")
         
