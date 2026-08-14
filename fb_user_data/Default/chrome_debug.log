@@ -1,0 +1,16 @@
+[0813/214930.023:INFO:CONSOLE:29] "Canvas2D: Multiple readback operations using getImageData are faster with the willReadFrequently attribute set to true. See: https://html.spec.whatwg.org/multipage/canvas.html#concept-canvas-will-read-frequently", source: https://static.xx.fbcdn.net/rsrc.php/v4inRI4/yU/l/en_US-j/Uj9_FAMqTI2L3okdcDdL0gUUySo3b3y9nnhNwwaev9Jk8bmxyfRg4RD.js (29)
+[0813/214930.167:INFO:CONSOLE:0] "[.WebGL-0x3064007e1e00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels", source: https://www.facebook.com/marketplace/tampa/search?query=golf%20cart (0)
+[0813/214930.169:INFO:CONSOLE:0] "The resource https://static.xx.fbcdn.net/rsrc.php/y6/r/6KKbht2-tDD.webp was preloaded using link preload but not used within a few seconds from the window's load event. Please make sure it has an appropriate `as` value and it is preloaded intentionally.", source: https://www.facebook.com/marketplace/tampa/search?query=golf%20cart (0)
+[0813/214930.214:INFO:CONSOLE:251] "
+%cStop! font-family:helvetica; font-size:20px; font-size:50px; font-weight:bold; color:red; -webkit-text-stroke:1px black;", source: https://static.xx.fbcdn.net/rsrc.php/v4/y6/r/RzGyLnQfQww.js (251)
+[0813/214930.217:INFO:CONSOLE:251] "
+%cThis is a browser feature intended for developers. If someone told you to copy-paste something here to enable a Facebook feature or "hack" someone's account, it's a scam and will give them access to your Facebook account. font-family:helvetica; font-size:20px; ", source: https://static.xx.fbcdn.net/rsrc.php/v4/y6/r/RzGyLnQfQww.js (251)
+[0813/214930.218:INFO:CONSOLE:251] "
+%cSee https://www.facebook.com/selfxss for more information. font-family:helvetica; font-size:20px; ", source: https://static.xx.fbcdn.net/rsrc.php/v4/y6/r/RzGyLnQfQww.js (251)
+[0813/214930.218:INFO:CONSOLE:251] "
+%c ", source: https://static.xx.fbcdn.net/rsrc.php/v4/y6/r/RzGyLnQfQww.js (251)
+[0813/214930.226:INFO:CONSOLE:84] "ErrorUtils caught an error:
+
+terminate stream because StartStreamFailure with msg : UNAUTHENTICATED [Caught in: Subscription error in preprocessResponse]
+
+Subsequent non-fatal errors won't be logged; see https://fburl.com/debugjs. [object Object]", source: https://static.xx.fbcdn.net/rsrc.php/v4/y6/r/RzGyLnQfQww.js (84)

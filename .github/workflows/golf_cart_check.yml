@@ -2,8 +2,8 @@ name: Golf Cart Monitor
 
 on:
   schedule:
-    # Runs every 2 hours (adjust as needed)
-    - cron: '0 */2 * * *'
+    # Runs every hour
+    - cron: '0 * * * *'
   workflow_dispatch: # Allows manual trigger from Actions tab
 
 jobs:
@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
 
     permissions:
-      contents: write  # Grants permissions to push seen_golf_carts.txt back to repo
+      contents: write  # Grants permissions to push tracking files back to repo
 
     steps:
       - name: Check out repository
@@ -28,18 +28,25 @@ jobs:
           pip install beautifulsoup4 curl_cffi playwright
           playwright install chromium --with-deps
 
-      - name: Run Golf Cart Monitor
+      - name: Run Nextdoor & OfferUp Monitor
         env:
           SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
           SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
           RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
           NEXTDOOR_SESSION_ID: ${{ secrets.NEXTDOOR_SESSION_ID }}
-        run: python golf_cart_monitor.py
+        run: python golf_cart_monitor.py || true
 
-      - name: Save seen listings back to GitHub
+      - name: Run Facebook Marketplace Monitor
+        env:
+          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
+          SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
+          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+        run: python fb_golf_cart_monitor.py || true
+
+      - name: Commit and push updated tracking files & session
         run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add seen_golf_carts.txt
-          # Only commit and push if seen_golf_carts.txt actually changed
-          git diff --staged --quiet || (git commit -m "Auto-update seen listings [skip ci]" && git push)
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add seen_ids.json seen_golf_carts.txt matched_golf_carts.csv fb_user_data/ || true
+          git commit -m "Auto-update seen lists and Facebook session [skip ci]" || exit 0
+          git push
