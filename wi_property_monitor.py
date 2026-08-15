@@ -40,15 +40,38 @@ EMAIL_RECEIVER = os.environ.get("RECIPIENT_EMAIL") or os.environ.get("EMAIL_RECE
 # ==========================================
 # HELPERS
 # ==========================================
-def parse_price(price_str):
-    """Converts price strings like '$150,000' to numeric floats."""
-    if not price_str or price_str.upper() in ["N/A", "CHECK LISTING", "CONTACT AGENT"]:
+def parse_price(price_str, acreage=None):
+    """Converts price strings ($249,900, $2.4M, $5,000/acre) to total numeric floats."""
+    if not price_str or any(w in price_str.upper() for w in ["N/A", "CHECK LISTING", "CONTACT AGENT"]):
         return None
-    cleaned = re.sub(r'[^\d.]', '', price_str.split()[0] if price_str.split() else price_str)
+    
+    lowered = price_str.lower()
+    
+    # 1. Skip auction starting bids ($1 or low starting bids)
+    if "auction" in lowered or "starting bid" in lowered:
+        return None
+
+    # 2. Extract numeric digits and decimals
+    match = re.search(r'\$?\s*([\d,]+(?:\.\d+)?)', price_str)
+    if not match:
+        return None
+        
+    cleaned = match.group(1).replace(',', '')
+    
     try:
         val = float(cleaned)
-        if 'k' in price_str.lower() and val < 1000:
-            val *= 1000
+        
+        # Handle Millions ($2.4M or $2.4 Million -> 2,400,000)
+        if ('m' in lowered or 'million' in lowered) and val < 1000:
+            val *= 1_000_000
+        # Handle Thousands ($250k or $250 Thousand -> 250,000)
+        elif ('k' in lowered or 'thousand' in lowered) and val < 1000:
+            val *= 1_000
+
+        # Handle "/acre" pricing if acreage is provided
+        if ("/acre" in lowered or "per acre" in lowered) and acreage:
+            val *= acreage
+            
         return val
     except ValueError:
         return None
