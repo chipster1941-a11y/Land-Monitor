@@ -34,7 +34,7 @@ jobs:
           SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
           RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
           NEXTDOOR_SESSION_ID: ${{ secrets.NEXTDOOR_SESSION_ID }}
-        run: python golf_cart_monitor.py || true
+        run: python fb_golf_cart_monitor.py || true
 
       - name: Run Facebook Marketplace Monitor
         env:
