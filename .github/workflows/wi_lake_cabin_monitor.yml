@@ -34,6 +34,22 @@ jobs:
           EMAIL_RECEIVER: ${{ secrets.RECIPIENT_EMAIL }}
         run: python wi_lake_cabin_monitor.py
 
+        # 1. This step runs your Python script
+      - name: Run Lake Cabin Monitor
+        env:
+          EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
+        run: python wi_lake_cabin_monitor.py
+
+      # 2. This NEW step saves the updated JSON file back to your repo
+      - name: Commit and Push Price History
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add lake_cabin_history.json
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update lake cabin price history" && git push)
+
       - name: Save seen listings back to GitHub
         run: |
           touch seen_cabins.txt
