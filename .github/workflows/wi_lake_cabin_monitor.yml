@@ -47,6 +47,7 @@ jobs:
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
+          touch lake_cabin_history.json
           git add lake_cabin_history.json
           git diff --quiet && git diff --staged --quiet || (git commit -m "Update lake cabin price history" && git push)
 
