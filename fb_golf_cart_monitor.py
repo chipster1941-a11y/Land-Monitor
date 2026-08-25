@@ -1,97 +1,84 @@
 import os
-import re
+import sys
+import json
 import csv
 import smtplib
-from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
-# --- CONFIGURATION ---
-FB_MARKETPLACE_URL = "https://www.facebook.com/marketplace/tampa/search?query=golf%20cart"
-SEEN_FILE = "seen_golf_carts.txt"
-CSV_FILE = "matched_golf_carts.csv"
+# Configuration
+FB_MARKETPLACE_URL = "https://www.facebook.com/marketplace/search?query=golf%20cart"
 
-# Keyword and Price Filtering
-KEYWORDS = ["golf cart", "golf cart", "ezgo", "club car", "yamaha", "icon", "evolution"]
-EXCLUDE_KEYWORDS = ["wanted", "looking for", "parts only", "tire", "battery", "charger", "cover", "windshield"]
-MAX_PRICE = 5000  # Adjust maximum budget here
-
-# Email Configuration from Environment Variables
+# Email Configuration from environment variables
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL")
 SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD")
 RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL")
 
-def load_seen_ids():
-    if os.path.exists(SEEN_FILE):
-        with open(SEEN_FILE, "r") as f:
-            return set(line.strip() for line in f if line.strip())
+def load_seen_ids(filename="seen_ids.json"):
+    if os.path.exists(filename):
+        try:
+            with open(filename, "r", encoding="utf-8") as f:
+                return set(json.load(f))
+        except Exception:
+            return set()
     return set()
 
-def save_seen_id(item_id):
-    with open(SEEN_FILE, "a") as f:
-        f.write(f"{item_id}\n")
+def save_seen_ids(seen_ids, filename="seen_ids.json"):
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(list(seen_ids), f, indent=2)
 
-def save_to_csv(item_id, title, price, url):
-    file_exists = os.path.exists(CSV_FILE)
-    with open(CSV_FILE, "a", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        if not file_exists:
-            writer.writerow(["ID", "Title", "Price", "URL"])
-        writer.writerow([item_id, title, price, url])
-
-def send_email_alert(new_matches):
+def send_email_notification(new_matches):
     if not SENDER_EMAIL or not SENDER_PASSWORD or not RECIPIENT_EMAIL:
-        print("Email credentials not fully set. Skipping email alert.")
+        print("Email configuration missing. Skipping email dispatch.")
         return
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"🚨 {len(new_matches)} New Golf Cart Listing(s) Found!"
-    msg["From"] = SENDER_EMAIL
-    msg["To"] = RECIPIENT_EMAIL
-
-    html_content = "<h2>New Golf Cart Matches Found:</h2><ul>"
+    subject = f"Golf Cart Alert: {len(new_matches)} New Listing(s) Found!"
+    
+    body = "<h2>New Golf Cart Listings Found:</h2><ul>"
     for item in new_matches:
-        html_content += f"""
-        <li>
-            <strong><a href="{item['url']}">{item['title']}</a></strong> - ${item['price']}<br>
-            <a href="{item['url']}">View Listing on Facebook Marketplace</a>
-        </li><br>
-        """
-    html_content += "</ul>"
+        body += f"<li><strong>{item['title']}</strong> - {item['price']}<br><a href='{item['link']}'>View Listing</a></li><br>"
+    body += "</ul>"
 
-    msg.attach(MIMEText(html_content, "html"))
+    msg = MIMEMultipart()
+    msg['From'] = SENDER_EMAIL
+    msg['To'] = RECIPIENT_EMAIL
+    msg['Subject'] = subject
+    msg.attach(MIMEText(body, 'html'))
 
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(SENDER_EMAIL, SENDER_PASSWORD)
-            server.sendmail(SENDER_EMAIL, RECIPIENT_EMAIL, msg.as_string())
-        print(f"Successfully sent email notification for {len(new_matches)} items.")
+            server.send_message(msg)
+        print("Email alert sent successfully!")
     except Exception as e:
-        print(f"Error sending email: {e}")
+        print(f"Failed to send email alert: {e}")
 
-def scrape_facebook():
+def run_scraper():
     seen_ids = load_seen_ids()
     new_matches = []
 
-    headless = os.environ.get("CI") == "true" or os.environ.get("HEADLESS") == "true"
-    print(f"Launching Playwright (Headless: {headless})...")
-
+    print("Launching Playwright (Headless: True)...")
     with sync_playwright() as p:
+        # Launch browser with anti-detection flags
         browser = p.chromium.launch(
-            headless=headless,
+            headless=True,
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
-                "--disable-setuid-sandbox"
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage"
             ]
         )
 
-        # Load session state from portable JSON file if present
+        # Build context options with realistic user agent
         context_args = {
             "viewport": {"width": 1280, "height": 800},
             "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
         }
+
+        # Check for saved Facebook session cookies
         if os.path.exists("storage_state.json"):
             print("Loaded logged-in session from storage_state.json")
             context_args["storage_state"] = "storage_state.json"
@@ -101,14 +88,17 @@ def scrape_facebook():
         context = browser.new_context(**context_args)
         page = context.new_page()
 
-        # Mask navigator.webdriver property
+        # Mask navigator.webdriver property to bypass bot checks
         page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
         print("Navigating to Facebook Marketplace...")
-        page.goto(FB_MARKETPLACE_URL, wait_until="domcontentloaded", timeout=45000)
-        page.wait_for_timeout(3000)
+        try:
+            page.goto(FB_MARKETPLACE_URL, wait_until="domcontentloaded", timeout=45000)
+            page.wait_for_timeout(3000)
+        except Exception as e:
+            print(f"Navigation warning/timeout: {e}")
 
-        # Dismiss potential cookie or location overlays
+        # Dismiss potential cookie or popup overlays
         try:
             close_btn = page.query_selector('div[aria-label="Close"], button:has-text("Allow"), button:has-text("Decline")')
             if close_btn:
@@ -123,57 +113,46 @@ def scrape_facebook():
         except Exception as e:
             print(f"Selector wait timed out, proceeding to scroll fallback: {e}")
 
-        # Scroll to trigger lazy loading of cards & thumbnails
+        # Scroll to lazy-load listing cards
         for _ in range(4):
             page.mouse.wheel(0, 1000)
             page.wait_for_timeout(2000)
 
-        # Save debug screenshot for artifact inspection
+        # Save debug screenshot for artifact inspection in GitHub Actions
         page.screenshot(path="fb_debug.png", full_page=True)
         print("Debug screenshot saved as fb_debug.png")
 
         soup = BeautifulSoup(page.content(), "html.parser")
         browser.close()
 
-    # Parse listing links
-    cards = soup.find_all("a", href=re.compile(r"/marketplace/item/\d+"))
-    print(f"Found {len(cards)} raw listing cards on page.")
+    # Parse marketplace items
+    cards = soup.find_all("a", href=True)
+    listing_links = [c for c in cards if "/marketplace/item/" in c["href"]]
+    print(f"Found {len(listing_links)} raw listing cards on page.")
 
-    for card in cards:
-        href = card.get("href", "")
-        match = re.search(r"/marketplace/item/(\d+)", href)
-        if not match:
-            continue
+    for link in listing_links:
+        raw_href = link["href"]
+        item_id = raw_href.split("/item/")[1].split("/")[0] if "/item/" in raw_href else raw_href
+        full_url = f"https://www.facebook.com{raw_href}" if raw_href.startswith("/") else raw_href
 
-        item_id = match.group(1)
-        if item_id in seen_ids:
-            continue
-
-        full_url = f"https://www.facebook.com/marketplace/item/{item_id}/"
-        text_content = card.get_text(separator=" ").strip()
-
-        # Price parsing
-        price_match = re.search(r"\$([0-9,]+)", text_content)
-        price = int(price_match.group(1).replace(",", "")) if price_match else 0
-
-        # Title parsing
-        title = text_content.replace(f"${price}", "").strip() if price else text_content
-        title_lower = title.lower()
-
-        # Keyword matching and filtering
-        if any(kw in title_lower for kw in KEYWORDS) and not any(ex in title_lower for ex in EXCLUDE_KEYWORDS):
-            if price == 0 or price <= MAX_PRICE:
-                print(f"✨ Match Found: {title} | ${price} | {full_url}")
-                new_matches.append({"id": item_id, "title": title, "price": price, "url": full_url})
-                save_seen_id(item_id)
-                seen_ids.add(item_id)
-                save_to_csv(item_id, title, price, full_url)
+        if item_id not in seen_ids:
+            seen_ids.add(item_id)
+            # Grab title/text content from card
+            text_content = link.get_text(separator=" | ").strip()
+            new_matches.append({
+                "id": item_id,
+                "title": text_content if text_content else "Golf Cart Listing",
+                "price": "Check Listing",
+                "link": full_url
+            })
 
     print(f"\nScan complete. Total new golf cart matches found: {len(new_matches)}")
+
     if new_matches:
-        send_email_alert(new_matches)
+        save_seen_ids(seen_ids)
+        send_email_notification(new_matches)
     else:
         print("No new golf cart listings found on this run.")
 
 if __name__ == "__main__":
-    scrape_facebook()
+    run_scraper()
