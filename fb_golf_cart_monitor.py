@@ -78,13 +78,31 @@ def run_scraper():
             "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
         }
 
-        # Check for saved Facebook session cookies
+       # Check for saved Facebook session cookies and sanitize in memory
         if os.path.exists("storage_state.json"):
-            print("Loaded logged-in session from storage_state.json")
-            context_args["storage_state"] = "storage_state.json"
+            print("Loading and sanitizing storage_state.json...")
+            with open("storage_state.json", "r", encoding="utf-8") as f:
+                state_data = json.load(f)
+            
+            # Clean up every cookie to match strict Playwright types
+            for cookie in state_data.get("cookies", []):
+                exp = cookie.get("expires")
+                if exp is not None and float(exp) > 0:
+                    exp_float = float(exp)
+                    # Convert milliseconds to seconds if needed
+                    if exp_float > 32503680000:
+                        exp_float = exp_float / 1000.0
+                    cookie["expires"] = int(exp_float)
+                else:
+                    cookie["expires"] = -1
+                
+                cookie["secure"] = bool(cookie.get("secure"))
+                cookie["httpOnly"] = bool(cookie.get("httpOnly"))
+
+            context_args["storage_state"] = state_data
+            print("Successfully loaded sanitized session state!")
         else:
             print("Warning: storage_state.json not found. Proceeding without session cookies.")
-
         context = browser.new_context(**context_args)
         page = context.new_page()
 
