@@ -13,9 +13,10 @@ from playwright.sync_api import sync_playwright
 CRAIGSLIST_SITES = ["tampa", "lakeland", "sarasota", "orlando"]
 FB_LOCATION = "tampa"  # Tampa, FL Facebook Marketplace region
 
-EMAIL_SENDER = os.getenv("EMAIL_SENDER")
-EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
-EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
+# Match exact working GitHub Actions secret names
+SENDER_EMAIL = os.environ.get("SENDER_EMAIL") or os.environ.get("EMAIL_SENDER")
+SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD") or os.environ.get("EMAIL_PASSWORD")
+RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL") or os.environ.get("EMAIL_RECEIVER")
 
 
 def check_craigslist():
