@@ -14,9 +14,9 @@ CRAIGSLIST_SITES = ["tampa", "lakeland", "sarasota", "orlando"]
 FB_LOCATION = "tampa"  # Tampa, FL Facebook Marketplace region
 
 # Match exact working GitHub Actions secret names
-SENDER_EMAIL = os.environ.get("SENDER_EMAIL") or os.environ.get("EMAIL_SENDER")
-SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD") or os.environ.get("EMAIL_PASSWORD")
-RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL") or os.environ.get("EMAIL_RECEIVER")
+EMAIL_SENDER = os.environ.get("EMAIL_SENDER") or os.environ.get("SENDER_EMAIL")
+EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD") or os.environ.get("SENDER_PASSWORD")
+EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER") or os.environ.get("RECIPIENT_EMAIL")
 
 
 def check_craigslist():
