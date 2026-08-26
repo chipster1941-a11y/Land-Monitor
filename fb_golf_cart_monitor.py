@@ -10,11 +10,13 @@ from playwright.sync_api import sync_playwright
 # Search URLs for Tampa, FL Region
 FB_SEARCH_URL = "https://www.facebook.com/marketplace/tampa/search?query=golf%20cart&exact=false"
 CL_SEARCH_URL = "https://tampa.craigslist.org/search/sss?query=golf%20cart"
+NEXTDOOR_SEARCH_URL = "https://nextdoor.com/for_sale_and_free/?query=golf%20cart"
 
-# Email Configuration from Environment Variables
-SENDER_EMAIL = os.environ.get("SENDER_EMAIL")
-SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD")
-RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL")
+# Email & Session Configuration
+SENDER_EMAIL = os.environ.get("SENDER_EMAIL") or os.environ.get("EMAIL_SENDER")
+SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD") or os.environ.get("EMAIL_PASSWORD")
+RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL") or os.environ.get("EMAIL_RECEIVER")
+NEXTDOOR_SESSION_ID = os.environ.get("NEXTDOOR_SESSION_ID")
 
 def load_seen_ids(filename="seen_golf_cart_ids.json"):
     if os.path.exists(filename):
@@ -36,7 +38,7 @@ def send_email_notification(new_matches):
 
     subject = f"Tampa Golf Cart Alert: {len(new_matches)} New Listing(s) Found!"
     
-    body = "<h2>New Golf Cart Listings Found in Tampa Area:</h2><ul>"
+    body = "<h2>New Golf Cart Listings Found (Tampa Area):</h2><ul>"
     for item in new_matches:
         body += f"<li><strong>[{item['source']}] {item['title']}</strong> - {item['price']}<br><a href='{item['link']}'>View Listing</a></li><br>"
     body += "</ul>"
@@ -59,22 +61,20 @@ def run_scraper():
     seen_ids = load_seen_ids()
     new_matches = []
 
-    print("Starting Playwright Scraper for Facebook & Craigslist (Tampa)...")
+    print("Starting Playwright Scraper for FB, Craigslist, and Nextdoor...")
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
             args=["--no-sandbox", "--disable-setuid-sandbox"]
         )
 
-        # Context setup
         context_args = {
             "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
             "viewport": {'width': 1280, 'height': 800}
         }
 
-        # Sanitize and load Facebook session cookies
+        # Load & sanitize Facebook storage_state.json if present
         if os.path.exists("storage_state.json"):
-            print("Loading and sanitizing storage_state.json for Facebook...")
             try:
                 with open("storage_state.json", "r", encoding="utf-8") as f:
                     state_data = json.load(f)
@@ -93,11 +93,22 @@ def run_scraper():
                     cookie["httpOnly"] = bool(cookie.get("httpOnly"))
 
                 context_args["storage_state"] = state_data
-                print("Facebook storage state loaded successfully!")
+                print("Loaded Facebook storage state successfully.")
             except Exception as e:
                 print(f"Warning: Failed to load storage_state.json: {e}")
 
         context = browser.new_context(**context_args)
+
+        # Inject Nextdoor session cookie if available
+        if NEXTDOOR_SESSION_ID:
+            context.add_cookies([{
+                "name": "sessionid",
+                "value": NEXTDOOR_SESSION_ID,
+                "domain": ".nextdoor.com",
+                "path": "/"
+            }])
+            print("Injected NEXTDOOR_SESSION_ID cookie into browser context.")
+
         page = context.new_page()
 
         # --- 1. SCRAPE CRAIGSLIST (TAMPA) ---
@@ -137,14 +148,10 @@ def run_scraper():
         try:
             page.goto(FB_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
             page.wait_for_timeout(4000)
-
-            # Scroll down to load extra items
             page.evaluate("window.scrollBy(0, 1000);")
             page.wait_for_timeout(2000)
 
             soup_fb = BeautifulSoup(page.content(), "html.parser")
-            
-            # Extract links pointing to marketplace items
             fb_cards = soup_fb.find_all("a", href=lambda href: href and "/marketplace/item/" in href)
             print(f"Found {len(fb_cards)} Facebook Marketplace cards.")
 
@@ -153,7 +160,6 @@ def run_scraper():
                 clean_link = f"https://www.facebook.com{raw_href.split('?')[0]}"
                 item_id = f"fb_{clean_link.split('/item/')[1].strip('/')}"
 
-                # Extract text lines inside card for title/price
                 card_text = [t.strip() for t in card.stripped_strings if t.strip()]
                 price = card_text[0] if card_text else "N/A"
                 title = card_text[1] if len(card_text) > 1 else "Golf Cart Listing"
@@ -170,9 +176,47 @@ def run_scraper():
         except Exception as e:
             print(f"Error scraping Facebook Marketplace: {e}")
 
+        # --- 3. SCRAPE NEXTDOOR ---
+        if NEXTDOOR_SESSION_ID:
+            print("Scraping Nextdoor For Sale & Free...")
+            try:
+                page.goto(NEXTDOOR_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
+                page.wait_for_timeout(4000)
+
+                # Find listing links on Nextdoor
+                cards = page.locator('a[href*="/for_sale_and_free/"]').all()
+                print(f"Found {len(cards)} raw Nextdoor elements.")
+
+                for card in cards:
+                    href = card.get_attribute("href")
+                    if not href or "/item/" not in href:
+                        continue
+                    
+                    clean_link = f"https://nextdoor.com{href.split('?')[0]}"
+                    item_id = f"nd_{clean_link.split('/item/')[1].strip('/')}"
+
+                    text = card.inner_text()
+                    lines = [line.strip() for line in text.split("\n") if line.strip()]
+                    price = lines[0] if lines and "$" in lines[0] else "N/A"
+                    title = lines[1] if len(lines) > 1 else (lines[0] if lines else "Nextdoor Golf Cart")
+
+                    if item_id not in seen_ids:
+                        seen_ids.add(item_id)
+                        new_matches.append({
+                            "source": "Nextdoor",
+                            "id": item_id,
+                            "title": title,
+                            "price": price,
+                            "link": clean_link
+                        })
+            except Exception as e:
+                print(f"Error scraping Nextdoor: {e}")
+        else:
+            print("NEXTDOOR_SESSION_ID not present in environment variables. Skipping Nextdoor search.")
+
         browser.close()
 
-    print(f"Scan complete. Total new matches found across both sites: {len(new_matches)}")
+    print(f"Scan complete. Total new matches found across all platforms: {len(new_matches)}")
 
     if new_matches:
         save_seen_ids(seen_ids)
