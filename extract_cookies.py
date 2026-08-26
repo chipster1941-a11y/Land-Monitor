@@ -8,14 +8,19 @@ def extract_facebook_session():
         
         cookies = []
         for c in cj:
+            # Clean up expiration: must be -1 or a positive integer timestamp
+            expires_val = -1
+            if c.expires and float(c.expires) > 0:
+                expires_val = int(c.expires)
+
             cookies.append({
                 "name": c.name,
                 "value": c.value,
                 "domain": c.domain,
                 "path": c.path,
-                "expires": float(c.expires) if c.expires else -1.0,
+                "expires": expires_val,
                 "httpOnly": bool(c.has_nonstandard_attr("HttpOnly")),
-                "secure": bool(c.secure),  # Explicitly convert to True/False
+                "secure": bool(c.secure),
                 "sameSite": "Lax"
             })
 
