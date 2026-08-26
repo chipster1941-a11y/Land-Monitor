@@ -76,12 +76,36 @@ def check_facebook_marketplace():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
 
-        # Load existing session if available to bypass login screen
-        if os.path.exists(session_file):
-            context = browser.new_context(storage_state=session_file)
-        else:
-            context = browser.new_context()
+        context_args = {
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            "viewport": {'width': 1280, 'height': 800}
+        }
 
+        # Load existing session and sanitize cookies in memory
+        if os.path.exists(session_file):
+            try:
+                with open(session_file, "r", encoding="utf-8") as f:
+                    state_data = json.load(f)
+                
+                for cookie in state_data.get("cookies", []):
+                    exp = cookie.get("expires")
+                    if exp is not None and float(exp) > 0:
+                        exp_float = float(exp)
+                        if exp_float > 32503680000:
+                            exp_float = exp_float / 1000.0
+                        cookie["expires"] = int(exp_float)
+                    else:
+                        cookie["expires"] = -1
+                    
+                    cookie["secure"] = bool(cookie.get("secure"))
+                    cookie["httpOnly"] = bool(cookie.get("httpOnly"))
+
+                context_args["storage_state"] = state_data
+                print("Loaded and sanitized storage_state.json for PowerPlate monitor.")
+            except Exception as e:
+                print(f"Warning: Failed to load storage_state.json: {e}")
+
+        context = browser.new_context(**context_args)
         page = context.new_page()
 
         for query in ["Power Plate", "PowerPlate", "my7 Power Plate"]:
