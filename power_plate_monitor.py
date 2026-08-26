@@ -68,7 +68,6 @@ def check_craigslist():
 
     return matches
 
-
 def check_facebook_marketplace():
     """Scrapes Facebook Marketplace in Tampa using Playwright and storage_state.json."""
     matches = []
