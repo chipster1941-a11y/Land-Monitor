@@ -8,11 +8,11 @@ from playwright.sync_api import sync_playwright
 
 # --- CONFIGURATION ---
 STATE_FILE = "seen_cabin_ids.json"
-CL_CABIN_URL = CL_CABIN_URL = "https://northernwi.craigslist.org/search/rea?query=lake+cabin"
+CL_CABIN_URL = "https://northernwi.craigslist.org/search/rea?query=lake+cabin"
+REALTOR_CABIN_URL = "https://www.realtor.com/realestateandhomes-search/Vilas-County_WI/type-single-family-home/waterfront"
 
 EXCLUDE_KEYWORDS = [
-    "wanted", "looking for", "dock for rent", "camper", 
-    "rv lot", "storage", "timeshare", "boat slip"
+    "wanted", "looking for", "dock for rent", "timeshare", "boat slip"
 ]
 
 def load_seen_items():
@@ -47,16 +47,13 @@ def clean_price(price_str):
         return f"${int(digits):,}"
     return "N/A"
 
-def is_valid_cabin(title, description=""):
+def is_valid_cabin(title):
     """Validates if listing matches lake cabin criteria and filters unwanted items."""
-    content = f"{title} {description}".lower()
-    
-    # Filter excluded keywords
+    content = title.lower()
     for kw in EXCLUDE_KEYWORDS:
         if kw in content:
             return False
-            
-    return True  # Return True if it passes exclusion checks
+    return True
 
 def send_email(matches):
     sender = os.getenv("EMAIL_SENDER") or os.getenv("SENDER_EMAIL")
@@ -99,7 +96,8 @@ def run_scraper():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            viewport={"width": 1280, "height": 800}
         )
         page = context.new_page()
 
@@ -107,11 +105,10 @@ def run_scraper():
         print("Scraping Northern WI Craigslist...")
         cl_added = 0
         try:
-            page.goto(CL_CABIN_URL, wait_until="networkidle", timeout=30000)
+            page.goto(CL_CABIN_URL, wait_until="domcontentloaded", timeout=30000)
             page.wait_for_timeout(3000)
             
             print(f"Craigslist Page Title: {page.title()}")
-
             cl_items = page.locator('.cl-static-search-result, li.cl-search-result, a.main').all()
             print(f"Found {len(cl_items)} raw Craigslist result items.")
 
@@ -149,11 +146,55 @@ def run_scraper():
         except Exception as e:
             print(f"Error scraping Craigslist: {e}")
 
+        # --- 2. SCRAPE REALTOR.COM (VILAS COUNTY / NORTHERN WI WATERFRONT) ---
+        print("Scraping Realtor.com...")
+        realtor_added = 0
+        try:
+            page.goto(REALTOR_CABIN_URL, wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_timeout(4000)
+            
+            print(f"Realtor Page Title: {page.title()}")
+            cards = page.locator('div[data-testid="property-card"], div.BasePropertyCard').all()
+            print(f"Found {len(cards)} raw Realtor.com result items.")
+
+            for card in cards[:25]:
+                try:
+                    card_text = card.inner_text().strip()
+                    link_elem = card.locator('a[data-testid="property-anchor"], a.title-part').first
+                    href = link_elem.get_attribute("href")
+                    
+                    if not href:
+                        continue
+
+                    clean_link = href if href.startswith("http") else f"https://www.realtor.com{href}"
+                    item_id = extract_clean_id(clean_link, prefix="realtor")
+
+                    # Extract price and title/address
+                    price_match = re.search(r'\$[\d,]+', card_text)
+                    price = price_match.group(0) if price_match else "N/A"
+
+                    address_lines = [line.strip() for line in card_text.split("\n") if len(line.strip()) > 5 and "$" not in line]
+                    title = address_lines[0] if address_lines else "Northern WI Lake Property"
+
+                    if item_id not in seen_items:
+                        seen_items[item_id] = price
+                        new_matches.append({"source": "Realtor.com", "id": item_id, "title": title, "price": price, "link": clean_link, "status": "NEW"})
+                        realtor_added += 1
+                    elif price != "N/A" and seen_items[item_id] != "N/A" and seen_items[item_id] != price:
+                        old_price = seen_items[item_id]
+                        seen_items[item_id] = price
+                        new_matches.append({"source": "Realtor.com", "id": item_id, "title": title, "price": f"{price} (Was {old_price})", "link": clean_link, "status": "PRICE DROP"})
+                        realtor_added += 1
+                except Exception:
+                    continue
+            print(f"Realtor.com section added {realtor_added} items to notification queue.")
+        except Exception as e:
+            print(f"Error scraping Realtor.com: {e}")
+
         browser.close()
 
     print(f"Scan complete. Total queue length for email dispatch: {len(new_matches)}")
 
- 
     # Dispatch Email
     if new_matches:
         send_email(new_matches)
