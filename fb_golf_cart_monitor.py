@@ -65,10 +65,18 @@ def send_email_notification(new_matches):
 
     subject = f"Tampa Golf Cart Alert: {len(new_matches)} Update(s) Found!"
     
-    body = "<h2>Golf Cart Updates (Tampa Area):</h2><ul>"
-    for item in new_matches:
-        status_tag = f"<strong style='color:red;'>[{item['status']}]</strong> " if item['status'] != "NEW" else ""
-        body += f"<li>{status_tag}<strong>[{item['source']}] {item['title']}</strong> - {item['price']}<br><a href='{item['link']}'>View Listing</a></li><br>"
+    # Sort matches by source so you can clearly see CL vs FB vs Nextdoor
+    sorted_matches = sorted(new_matches, key=lambda x: x['source'])
+    
+    body = f"<h2>Golf Cart Updates ({len(sorted_matches)} total):</h2><ul>"
+    for item in sorted_matches:
+        status_tag = f"<strong style='color:red;'>[{item.get('status', 'NEW')}]</strong> " if item.get('status') != "NEW" else ""
+        source_tag = f"<strong>[{item.get('source', 'Unknown')}]</strong>"
+        title_text = item.get('title', 'No Title')
+        price_text = item.get('price', 'N/A')
+        link_url = item.get('link', '#')
+        
+        body += f"<li>{status_tag}{source_tag} {title_text} - {price_text}<br><a href='{link_url}'>View Listing</a></li><br>"
     body += "</ul>"
 
     msg = MIMEMultipart()
@@ -81,7 +89,7 @@ def send_email_notification(new_matches):
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(SENDER_EMAIL, SENDER_PASSWORD)
             server.send_message(msg)
-        print("Email alert sent successfully!")
+        print(f"Email alert sent successfully with {len(sorted_matches)} listings!")
     except Exception as e:
         print(f"Failed to send email alert: {e}")
 
@@ -129,14 +137,15 @@ def run_scraper():
 
         # --- 1. SCRAPE CRAIGSLIST (TAMPA) ---
         print("Scraping Tampa Craigslist...")
+        cl_added = 0
         try:
             page.goto(CL_SEARCH_URL, wait_until="networkidle", timeout=30000)
             page.wait_for_timeout(3000)
             
             cl_items = page.locator('.cl-static-search-result, li.cl-search-result, a.main').all()
-            print(f"Found {len(cl_items)} Craigslist result items.")
+            print(f"Found {len(cl_items)} raw Craigslist result items.")
 
-            for item in cl_items[:20]:
+            for item in cl_items[:30]:
                 try:
                     text = item.inner_text().strip()
                     href = item.get_attribute("href") or item.locator("a").get_attribute("href")
@@ -156,17 +165,21 @@ def run_scraper():
                     if item_id not in seen_items:
                         seen_items[item_id] = price
                         new_matches.append({"source": "Craigslist", "id": item_id, "title": title, "price": price, "link": clean_link, "status": "NEW"})
+                        cl_added += 1
                     elif seen_items[item_id] != price and price != "N/A":
                         old_price = seen_items[item_id]
                         seen_items[item_id] = price
                         new_matches.append({"source": "Craigslist", "id": item_id, "title": title, "price": f"{price} (Was {old_price})", "link": clean_link, "status": "PRICE DROP"})
-                except Exception:
+                        cl_added += 1
+                except Exception as inner_e:
                     continue
+            print(f"Craigslist section added {cl_added} items to notification queue.")
         except Exception as e:
             print(f"Error scraping Craigslist: {e}")
 
         # --- 2. SCRAPE FACEBOOK MARKETPLACE (TAMPA) ---
         print("Scraping Tampa Facebook Marketplace...")
+        fb_added = 0
         try:
             page.goto(FB_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
             page.wait_for_timeout(5000)
@@ -198,16 +211,20 @@ def run_scraper():
                 if item_id not in seen_items:
                     seen_items[item_id] = price
                     new_matches.append({"source": "Facebook", "id": item_id, "title": title, "price": price, "link": clean_link, "status": "NEW"})
+                    fb_added += 1
                 elif seen_items[item_id] != price and price != "N/A":
                     old_price = seen_items[item_id]
                     seen_items[item_id] = price
                     new_matches.append({"source": "Facebook", "id": item_id, "title": title, "price": f"{price} (Was {old_price})", "link": clean_link, "status": "PRICE DROP"})
+                    fb_added += 1
+            print(f"Facebook section added {fb_added} items to notification queue.")
         except Exception as e:
             print(f"Error scraping Facebook Marketplace: {e}")
 
         # --- 3. SCRAPE NEXTDOOR ---
         if NEXTDOOR_SESSION_ID:
             print("Scraping Nextdoor For Sale & Free...")
+            nd_added = 0
             try:
                 nd_page = context.new_page()
                 nd_page.set_extra_http_headers({"Cookie": f"sessionid={NEXTDOOR_SESSION_ID.strip()}"})
@@ -239,19 +256,22 @@ def run_scraper():
                         if item_id not in seen_items:
                             seen_items[item_id] = price
                             new_matches.append({"source": "Nextdoor", "id": item_id, "title": title, "price": price, "link": clean_link, "status": "NEW"})
+                            nd_added += 1
                         elif seen_items[item_id] != price and price != "N/A":
                             old_price = seen_items[item_id]
                             seen_items[item_id] = price
                             new_matches.append({"source": "Nextdoor", "id": item_id, "title": title, "price": f"{price} (Was {old_price})", "link": clean_link, "status": "PRICE DROP"})
+                            nd_added += 1
                     except Exception:
                         continue
+                print(f"Nextdoor section added {nd_added} items to notification queue.")
                 nd_page.close()
             except Exception as e:
                 print(f"Error scraping Nextdoor: {e}")
 
         browser.close()
 
-    print(f"Scan complete. Found {len(new_matches)} new or updated listing(s).")
+    print(f"Scan complete. Total queue length for email dispatch: {len(new_matches)}")
 
     if new_matches:
         save_seen_items(seen_items)
