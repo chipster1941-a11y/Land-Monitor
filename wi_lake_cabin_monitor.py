@@ -63,10 +63,18 @@ def is_valid_cabin(title, description=""):
     """Validates if listing matches lake cabin criteria and filters unwanted items."""
     content = f"{title} {description}".lower()
     
-    # Check for excluded words
+    # 1. Check for excluded words
     for kw in EXCLUDE_KEYWORDS:
         if kw in content:
             return False
+
+    # 2. (Optional) Check for required keywords if EXCLUDE_KEYWORDS is empty or minimal
+    # REQUIRED_KEYWORDS = ["lake", "cabin", "waterfront", "cottage", "river", "flowage"]
+    # if not any(req_kw in content for req_kw in REQUIRED_KEYWORDS):
+    #     return False
+
+    # 3. Explicitly return True if it passed all checks!
+    return True
 
     # Ensure at least one target keyword is present
     return any(kw in content for kw in INCLUDE_KEYWORDS)
@@ -233,7 +241,7 @@ def run_scraper():
             page.goto(ZILLOW_CABIN_URL, wait_until="domcontentloaded", timeout=30000)
             page.wait_for_timeout(4000)
             print(f"Zillow Page Title: {page.title()}")
-            
+
             soup_zillow = BeautifulSoup(page.content(), "html.parser")
             z_cards = soup_zillow.find_all("article", class_=lambda c: c and "property-card" in c)
             print(f"Found {len(z_cards)} Zillow cards.")
