@@ -18,29 +18,55 @@ SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD") or os.environ.get("EMAIL_PAS
 RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL") or os.environ.get("EMAIL_RECEIVER")
 NEXTDOOR_SESSION_ID = os.environ.get("NEXTDOOR_SESSION_ID")
 
-def load_seen_ids(filename="seen_golf_cart_ids.json"):
+# Keywords to ignore (accessory filter)
+EXCLUDE_KEYWORDS = [
+    "charger", "cover", "enclosure", "tire", "wheel", "rim", 
+    "battery", "batteries", "windshield", "seat", "key", "part", "parts"
+]
+
+def load_seen_items(filename="seen_golf_cart_ids.json"):
+    """Loads a dictionary of {item_id: price} to track new items and price drops."""
     if os.path.exists(filename):
         try:
             with open(filename, "r", encoding="utf-8") as f:
-                return set(json.load(f))
+                data = json.load(f)
+                # Convert old list format to dict if migrating from old format
+                if isinstance(data, list):
+                    return {item_id: "N/A" for item_id in data}
+                return data
         except Exception:
-            return set()
-    return set()
+            return {}
+    return {}
 
-def save_seen_ids(seen_ids, filename="seen_golf_cart_ids.json"):
+def save_seen_items(seen_dict, filename="seen_golf_cart_ids.json"):
+    """Saves the updated {item_id: price} dictionary."""
     with open(filename, "w", encoding="utf-8") as f:
-        json.dump(list(seen_ids), f, indent=2)
+        json.dump(seen_dict, f, indent=2)
+
+def is_valid_cart(title):
+    """Returns True if the title looks like a real cart and not an accessory."""
+    title_lower = title.lower()
+    if "golf" not in title_lower and "cart" not in title_lower:
+        return False
+    for word in EXCLUDE_KEYWORDS:
+        if f" {word}" in title_lower or f"{word}s" in title_lower or title_lower.startswith(word):
+            # If it explicitly says "golf cart WITH charger", keep it; otherwise ignore solo accessory listings
+            if "with charger" in title_lower or "w/ charger" in title_lower:
+                continue
+            return False
+    return True
 
 def send_email_notification(new_matches):
     if not SENDER_EMAIL or not SENDER_PASSWORD or not RECIPIENT_EMAIL:
         print("Email configuration missing. Skipping email dispatch.")
         return
 
-    subject = f"Tampa Golf Cart Alert: {len(new_matches)} New Listing(s) Found!"
+    subject = f"Tampa Golf Cart Alert: {len(new_matches)} Update(s) Found!"
     
-    body = "<h2>New Golf Cart Listings Found (Tampa Area):</h2><ul>"
+    body = "<h2>Golf Cart Updates (Tampa Area):</h2><ul>"
     for item in new_matches:
-        body += f"<li><strong>[{item['source']}] {item['title']}</strong> - {item['price']}<br><a href='{item['link']}'>View Listing</a></li><br>"
+        status_tag = f"<strong style='color:red;'>[{item['status']}]</strong> " if item['status'] != "NEW" else ""
+        body += f"<li>{status_tag}<strong>[{item['source']}] {item['title']}</strong> - {item['price']}<br><a href='{item['link']}'>View Listing</a></li><br>"
     body += "</ul>"
 
     msg = MIMEMultipart()
@@ -58,7 +84,7 @@ def send_email_notification(new_matches):
         print(f"Failed to send email alert: {e}")
 
 def run_scraper():
-    seen_ids = load_seen_ids()
+    seen_items = load_seen_items()
     new_matches = []
 
     print("Starting Playwright Scraper for FB, Craigslist, and Nextdoor...")
@@ -106,11 +132,7 @@ def run_scraper():
             page.goto(CL_SEARCH_URL, wait_until="networkidle", timeout=30000)
             page.wait_for_timeout(3000)
             
-            # Select gallery & list layout elements on modern Craigslist
-            cl_items = page.locator('.cl-static-search-result, li.cl-search-result').all()
-            if not cl_items:
-                cl_items = page.locator('a.main').all()
-
+            cl_items = page.locator('.cl-static-search-result, li.cl-search-result, a.main').all()
             print(f"Found {len(cl_items)} Craigslist result items.")
 
             for item in cl_items[:20]:
@@ -118,25 +140,26 @@ def run_scraper():
                     text = item.inner_text().strip()
                     href = item.get_attribute("href") or item.locator("a").get_attribute("href")
                     
-                    if not href or "golf" not in text.lower():
+                    lines = [line.strip() for line in text.split("\n") if line.strip()]
+                    if not href or not lines:
                         continue
                     
+                    title = lines[0]
+                    if not is_valid_cart(title):
+                        continue
+
                     clean_link = href if href.startswith("http") else f"https://tampa.craigslist.org{href}"
                     item_id = f"cl_{clean_link.split('/')[-1].replace('.html', '')}"
-
-                    lines = [line.strip() for line in text.split("\n") if line.strip()]
-                    title = lines[0]
                     price = next((l for l in lines if "$" in l), "N/A")
 
-                    if item_id not in seen_ids:
-                        seen_ids.add(item_id)
-                        new_matches.append({
-                            "source": "Craigslist",
-                            "id": item_id,
-                            "title": title,
-                            "price": price,
-                            "link": clean_link
-                        })
+                    # Check for new listing or price drop
+                    if item_id not in seen_items:
+                        seen_items[item_id] = price
+                        new_matches.append({"source": "Craigslist", "id": item_id, "title": title, "price": price, "link": clean_link, "status": "NEW"})
+                    elif seen_items[item_id] != price and price != "N/A":
+                        old_price = seen_items[item_id]
+                        seen_items[item_id] = price
+                        new_matches.append({"source": "Craigslist", "id": item_id, "title": title, "price": f"{price} (Was {old_price})", "link": clean_link, "status": "PRICE DROP"})
                 except Exception:
                     continue
         except Exception as e:
@@ -163,15 +186,16 @@ def run_scraper():
                 price = card_text[0] if card_text else "N/A"
                 title = card_text[1] if len(card_text) > 1 else "Golf Cart Listing"
 
-                if item_id not in seen_ids:
-                    seen_ids.add(item_id)
-                    new_matches.append({
-                        "source": "Facebook",
-                        "id": item_id,
-                        "title": title,
-                        "price": price,
-                        "link": clean_link
-                    })
+                if not is_valid_cart(title):
+                    continue
+
+                if item_id not in seen_items:
+                    seen_items[item_id] = price
+                    new_matches.append({"source": "Facebook", "id": item_id, "title": title, "price": price, "link": clean_link, "status": "NEW"})
+                elif seen_items[item_id] != price and price != "N/A":
+                    old_price = seen_items[item_id]
+                    seen_items[item_id] = price
+                    new_matches.append({"source": "Facebook", "id": item_id, "title": title, "price": f"{price} (Was {old_price})", "link": clean_link, "status": "PRICE DROP"})
         except Exception as e:
             print(f"Error scraping Facebook Marketplace: {e}")
 
@@ -180,15 +204,11 @@ def run_scraper():
             print("Scraping Nextdoor For Sale & Free...")
             try:
                 nd_page = context.new_page()
-                nd_page.set_extra_http_headers({
-                    "Cookie": f"sessionid={NEXTDOOR_SESSION_ID.strip()}"
-                })
+                nd_page.set_extra_http_headers({"Cookie": f"sessionid={NEXTDOOR_SESSION_ID.strip()}"})
                 
-                # Use main search endpoint to prevent redirects to feed
                 nd_page.goto(NEXTDOOR_SEARCH_URL, wait_until="networkidle", timeout=30000)
                 nd_page.wait_for_timeout(4000)
 
-                # Filter specifically for item listings within search result container
                 nd_cards = nd_page.locator('a[href*="/for_sale_and_free/"], a[href*="/post/"]').all()
                 print(f"Found {len(nd_cards)} raw Nextdoor elements.")
 
@@ -196,47 +216,42 @@ def run_scraper():
                     try:
                         href = card.get_attribute("href")
                         text = card.inner_text().strip()
-                        
-                        # Guard against feed elements or navigation links missing 'golf'
-                        if not href or "golf" not in text.lower():
-                            continue
-                        
-                        clean_link = href if href.startswith("http") else f"https://nextdoor.com{href.split('?')[0]}"
-                        item_id = f"nd_{clean_link.split('/')[-1].strip('/')}"
-
                         lines = [line.strip() for line in text.split("\n") if line.strip()]
-                        if not lines:
+                        
+                        if not href or not lines:
                             continue
-
+                        
                         price = next((l for l in lines if "$" in l), "N/A")
                         title = lines[0] if lines[0] != price else (lines[1] if len(lines) > 1 else "Nextdoor Item")
 
-                        if item_id not in seen_ids:
-                            seen_ids.add(item_id)
-                            new_matches.append({
-                                "source": "Nextdoor",
-                                "id": item_id,
-                                "title": title,
-                                "price": price,
-                                "link": clean_link
-                            })
+                        if not is_valid_cart(title):
+                            continue
+
+                        clean_link = href if href.startswith("http") else f"https://nextdoor.com{href.split('?')[0]}"
+                        item_id = f"nd_{clean_link.split('/')[-1].strip('/')}"
+
+                        if item_id not in seen_items:
+                            seen_items[item_id] = price
+                            new_matches.append({"source": "Nextdoor", "id": item_id, "title": title, "price": price, "link": clean_link, "status": "NEW"})
+                        elif seen_items[item_id] != price and price != "N/A":
+                            old_price = seen_items[item_id]
+                            seen_items[item_id] = price
+                            new_matches.append({"source": "Nextdoor", "id": item_id, "title": title, "price": f"{price} (Was {old_price})", "link": clean_link, "status": "PRICE DROP"})
                     except Exception:
                         continue
                 nd_page.close()
             except Exception as e:
                 print(f"Error scraping Nextdoor: {e}")
-        else:
-            print("NEXTDOOR_SESSION_ID not present. Skipping Nextdoor search.")
 
         browser.close()
 
-    print(f"Scan complete. Total new matches found across all platforms: {len(new_matches)}")
+    print(f"Scan complete. Found {len(new_matches)} new or updated listing(s).")
 
     if new_matches:
-        save_seen_ids(seen_ids)
+        save_seen_items(seen_items)
         send_email_notification(new_matches)
     else:
-        print("No new listings found on this run.")
+        print("No new listings or price drops on this run.")
 
 if __name__ == "__main__":
     run_scraper()
