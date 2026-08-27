@@ -8,7 +8,7 @@ from playwright.sync_api import sync_playwright
 
 # --- CONFIGURATION ---
 STATE_FILE = "seen_cabin_ids.json"
-CL_CABIN_URL = "https://northernwi.craigslist.org/search/rea?query=%22lake+cabin%22"
+CL_CABIN_URL = CL_CABIN_URL = "https://northernwi.craigslist.org/search/rea?query=lake+cabin"
 
 EXCLUDE_KEYWORDS = [
     "wanted", "looking for", "dock for rent", "camper", 
@@ -153,18 +153,7 @@ def run_scraper():
 
     print(f"Scan complete. Total queue length for email dispatch: {len(new_matches)}")
 
-    # --- FIX B: TEMPORARY EMAIL TEST BLOCK ---
-    if not new_matches:
-        print("No real listings found. Injecting dummy test item to test email delivery...")
-        new_matches.append({
-            "source": "Test",
-            "id": "test_001",
-            "title": "TEST EMAIL: Wisconsin Lake Cabin Notification",
-            "price": "$250,000",
-            "link": "https://northernwi.craigslist.org",
-            "status": "NEW"
-        })
-
+ 
     # Dispatch Email
     if new_matches:
         send_email(new_matches)
