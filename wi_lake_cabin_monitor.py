@@ -96,8 +96,8 @@ def run_scraper():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            viewport={"width": 1280, "height": 800}
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            viewport={"width": 1400, "height": 900}
         )
         page = context.new_page()
 
@@ -109,59 +109,65 @@ def run_scraper():
             page.wait_for_timeout(3000)
             
             print(f"Craigslist Page Title: {page.title()}")
-            cl_items = page.locator('.cl-static-search-result, li.cl-search-result, a.main').all()
+            cl_items = page.locator('ol.cl-static-search-results > li, li.cl-search-result, div.cl-search-result').all()
+            if not cl_items:
+                cl_items = page.locator('a.main, a.cl-app-anchor').all()
+
             print(f"Found {len(cl_items)} raw Craigslist result items.")
 
             for item in cl_items[:40]:
                 try:
-                    text = item.inner_text().strip()
-                    href = item.get_attribute("href") or item.locator("a").get_attribute("href")
-                    
-                    lines = [line.strip() for line in text.split("\n") if line.strip()]
-                    if not href or not lines:
+                    # Get anchor tag directly for title and link
+                    link_elem = item if item.evaluate("el => el.tagName === 'A'") else item.locator("a").first
+                    href = link_elem.get_attribute("href")
+                    title = link_elem.inner_text().strip()
+
+                    if not href or not title:
                         continue
-                    
-                    title = lines[0]
+
                     if not is_valid_cabin(title):
                         continue
 
                     clean_link = href if href.startswith("http") else f"https://northernwi.craigslist.org{href}"
                     item_id = extract_clean_id(clean_link, prefix="cl")
                     
-                    raw_price = next((l for l in lines if "$" in l), "N/A")
-                    price = clean_price(raw_price)
+                    full_text = item.inner_text()
+                    price_match = re.search(r'\$[\d,]+', full_text)
+                    price = price_match.group(0) if price_match else "N/A"
 
                     if item_id not in seen_items:
                         seen_items[item_id] = price
                         new_matches.append({"source": "Craigslist", "id": item_id, "title": title, "price": price, "link": clean_link, "status": "NEW"})
                         cl_added += 1
+                        print(f"  + Queued CL: {title} ({price})")
                     elif price != "N/A" and seen_items[item_id] != "N/A" and seen_items[item_id] != price:
                         old_price = seen_items[item_id]
                         seen_items[item_id] = price
                         new_matches.append({"source": "Craigslist", "id": item_id, "title": title, "price": f"{price} (Was {old_price})", "link": clean_link, "status": "PRICE DROP"})
                         cl_added += 1
-                except Exception:
+                        print(f"  + Price Drop CL: {title} ({price})")
+                except Exception as e:
                     continue
             print(f"Craigslist section added {cl_added} items to notification queue.")
         except Exception as e:
             print(f"Error scraping Craigslist: {e}")
 
-        # --- 2. SCRAPE REALTOR.COM (VILAS COUNTY / NORTHERN WI WATERFRONT) ---
+        # --- 2. SCRAPE REALTOR.COM (VILAS COUNTY WATERFRONT) ---
         print("Scraping Realtor.com...")
         realtor_added = 0
         try:
-            page.goto(REALTOR_CABIN_URL, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_timeout(4000)
+            page.goto(REALTOR_CABIN_URL, wait_until="networkidle", timeout=35000)
+            page.wait_for_timeout(5000)
             
             print(f"Realtor Page Title: {page.title()}")
-            cards = page.locator('div[data-testid="property-card"], div.BasePropertyCard').all()
+            cards = page.locator('div[id^="property-card"], div[data-testid="property-card"], article[data-testid="property-card"]').all()
             print(f"Found {len(cards)} raw Realtor.com result items.")
 
             for card in cards[:25]:
                 try:
                     card_text = card.inner_text().strip()
-                    link_elem = card.locator('a[data-testid="property-anchor"], a.title-part').first
-                    href = link_elem.get_attribute("href")
+                    link_elem = card.locator('a[href*="/realestateandhomes-detail/"]').first
+                    href = link_elem.get_attribute("href") if link_elem.count() > 0 else None
                     
                     if not href:
                         continue
@@ -169,22 +175,24 @@ def run_scraper():
                     clean_link = href if href.startswith("http") else f"https://www.realtor.com{href}"
                     item_id = extract_clean_id(clean_link, prefix="realtor")
 
-                    # Extract price and title/address
                     price_match = re.search(r'\$[\d,]+', card_text)
                     price = price_match.group(0) if price_match else "N/A"
 
-                    address_lines = [line.strip() for line in card_text.split("\n") if len(line.strip()) > 5 and "$" not in line]
-                    title = address_lines[0] if address_lines else "Northern WI Lake Property"
+                    # Clean address/title extraction
+                    text_lines = [l.strip() for l in card_text.split("\n") if len(l.strip()) > 5 and "$" not in l]
+                    title = text_lines[0] if text_lines else "Vilas County Lake Property"
 
                     if item_id not in seen_items:
                         seen_items[item_id] = price
                         new_matches.append({"source": "Realtor.com", "id": item_id, "title": title, "price": price, "link": clean_link, "status": "NEW"})
                         realtor_added += 1
+                        print(f"  + Queued Realtor: {title} ({price})")
                     elif price != "N/A" and seen_items[item_id] != "N/A" and seen_items[item_id] != price:
                         old_price = seen_items[item_id]
                         seen_items[item_id] = price
                         new_matches.append({"source": "Realtor.com", "id": item_id, "title": title, "price": f"{price} (Was {old_price})", "link": clean_link, "status": "PRICE DROP"})
                         realtor_added += 1
+                        print(f"  + Price Drop Realtor: {title} ({price})")
                 except Exception:
                     continue
             print(f"Realtor.com section added {realtor_added} items to notification queue.")
