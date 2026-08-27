@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import re
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -18,19 +19,23 @@ SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD") or os.environ.get("EMAIL_PAS
 RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL") or os.environ.get("EMAIL_RECEIVER")
 NEXTDOOR_SESSION_ID = os.environ.get("NEXTDOOR_SESSION_ID")
 
-# Keywords to ignore (accessory filter)
 EXCLUDE_KEYWORDS = [
     "charger", "cover", "enclosure", "tire", "wheel", "rim", 
     "battery", "batteries", "windshield", "seat", "key", "part", "parts"
 ]
 
+def extract_fb_id(url):
+    """Extracts purely numerical Facebook Marketplace Item ID to prevent duplicate alerts."""
+    match = re.search(r'/marketplace/item/(\d+)', url)
+    if match:
+        return f"fb_{match.group(1)}"
+    return None
+
 def load_seen_items(filename="seen_golf_cart_ids.json"):
-    """Loads a dictionary of {item_id: price} to track new items and price drops."""
     if os.path.exists(filename):
         try:
             with open(filename, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                # Convert old list format to dict if migrating from old format
                 if isinstance(data, list):
                     return {item_id: "N/A" for item_id in data}
                 return data
@@ -39,18 +44,15 @@ def load_seen_items(filename="seen_golf_cart_ids.json"):
     return {}
 
 def save_seen_items(seen_dict, filename="seen_golf_cart_ids.json"):
-    """Saves the updated {item_id: price} dictionary."""
     with open(filename, "w", encoding="utf-8") as f:
         json.dump(seen_dict, f, indent=2)
 
 def is_valid_cart(title):
-    """Returns True if the title looks like a real cart and not an accessory."""
     title_lower = title.lower()
     if "golf" not in title_lower and "cart" not in title_lower:
         return False
     for word in EXCLUDE_KEYWORDS:
         if f" {word}" in title_lower or f"{word}s" in title_lower or title_lower.startswith(word):
-            # If it explicitly says "golf cart WITH charger", keep it; otherwise ignore solo accessory listings
             if "with charger" in title_lower or "w/ charger" in title_lower:
                 continue
             return False
@@ -99,7 +101,6 @@ def run_scraper():
             "viewport": {'width': 1280, 'height': 800}
         }
 
-        # Load Facebook storage_state.json if present
         if os.path.exists("storage_state.json"):
             try:
                 with open("storage_state.json", "r", encoding="utf-8") as f:
@@ -152,7 +153,6 @@ def run_scraper():
                     item_id = f"cl_{clean_link.split('/')[-1].replace('.html', '')}"
                     price = next((l for l in lines if "$" in l), "N/A")
 
-                    # Check for new listing or price drop
                     if item_id not in seen_items:
                         seen_items[item_id] = price
                         new_matches.append({"source": "Craigslist", "id": item_id, "title": title, "price": price, "link": clean_link, "status": "NEW"})
@@ -169,9 +169,9 @@ def run_scraper():
         print("Scraping Tampa Facebook Marketplace...")
         try:
             page.goto(FB_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_timeout(4000)
+            page.wait_for_timeout(5000)
             page.evaluate("window.scrollBy(0, 1000);")
-            page.wait_for_timeout(2000)
+            page.wait_for_timeout(3000)
 
             soup_fb = BeautifulSoup(page.content(), "html.parser")
             fb_cards = soup_fb.find_all("a", href=lambda href: href and "/marketplace/item/" in href)
@@ -179,12 +179,18 @@ def run_scraper():
 
             for card in fb_cards:
                 raw_href = card["href"]
-                clean_link = f"https://www.facebook.com{raw_href.split('?')[0]}"
-                item_id = f"fb_{clean_link.split('/item/')[1].strip('/')}"
+                item_id = extract_fb_id(raw_href)
+                if not item_id:
+                    continue
+
+                clean_link = f"https://www.facebook.com/marketplace/item/{item_id.replace('fb_', '')}/"
 
                 card_text = [t.strip() for t in card.stripped_strings if t.strip()]
-                price = card_text[0] if card_text else "N/A"
-                title = card_text[1] if len(card_text) > 1 else "Golf Cart Listing"
+                if not card_text:
+                    continue
+
+                price = card_text[0] if "$" in card_text[0] else ("N/A" if not any("$" in t for t in card_text) else next(t for t in card_text if "$" in t))
+                title = card_text[1] if len(card_text) > 1 and card_text[1] != price else card_text[0]
 
                 if not is_valid_cart(title):
                     continue
