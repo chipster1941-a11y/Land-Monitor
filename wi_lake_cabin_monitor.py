@@ -8,7 +8,6 @@ from playwright.sync_api import sync_playwright
 
 # --- CONFIGURATION ---
 STATE_FILE = "seen_cabin_ids.json"
-# Removed hardcoded quotes (%22) from the search query
 CL_CABIN_URL = "https://northernwi.craigslist.org/search/rea?query=lake+cabin"
 REALTOR_CABIN_URL = "https://www.realtor.com/realestateandhomes-search/Vilas-County_WI/type-single-family-home/waterfront"
 
@@ -49,7 +48,6 @@ def clean_price(price_str):
     return "N/A"
 
 def is_valid_cabin(title):
-    """Validates if listing matches lake cabin criteria and filters unwanted items."""
     content = title.lower()
     for kw in EXCLUDE_KEYWORDS:
         if kw in content:
@@ -122,8 +120,18 @@ def run_scraper():
                     if not href or not text:
                         continue
                     
-                    lines = [line.strip() for line in text.split("\n") if line.strip()]
-                    title = lines[0] if lines else "Northern WI Property"
+                    # Target specific title attributes or sub-elements first
+                    title_elem = item.locator('.title, .label, a.main, .posting-title, span.titletext').first
+                    if title_elem.count() > 0 and title_elem.inner_text().strip():
+                        title = title_elem.inner_text().strip()
+                    else:
+                        # Fallback: Filter out bullets, empty lines, and raw prices from line list
+                        lines = [line.strip() for line in text.split("\n") if line.strip()]
+                        valid_title_lines = [
+                            l for l in lines 
+                            if l not in ["•", "-", ""] and not l.startswith("$") and len(l) > 3
+                        ]
+                        title = valid_title_lines[0] if valid_title_lines else "Northern WI Lake Cabin"
 
                     if not is_valid_cabin(title):
                         continue
@@ -131,8 +139,8 @@ def run_scraper():
                     clean_link = href if href.startswith("http") else f"https://northernwi.craigslist.org{href}"
                     item_id = extract_clean_id(clean_link, prefix="cl")
                     
-                    raw_price = next((l for l in lines if "$" in l), "N/A")
-                    price = clean_price(raw_price)
+                    price_match = re.search(r'\$[\d,]+', text)
+                    price = clean_price(price_match.group(0)) if price_match else "N/A"
 
                     if item_id not in seen_items:
                         seen_items[item_id] = price
@@ -157,8 +165,6 @@ def run_scraper():
         try:
             page.goto(REALTOR_CABIN_URL, wait_until="domcontentloaded", timeout=35000)
             page.wait_for_timeout(4000)
-            
-            # Scroll down to trigger lazy loading of property cards
             page.mouse.wheel(0, 1500)
             page.wait_for_timeout(2000)
 
@@ -186,8 +192,13 @@ def run_scraper():
                     price_match = re.search(r'\$[\d,]+', card_text)
                     price = price_match.group(0) if price_match else "N/A"
 
-                    text_lines = [l.strip() for l in card_text.split("\n") if len(l.strip()) > 5 and "$" not in l]
-                    title = text_lines[0] if text_lines else "Vilas County Lake Property"
+                    # Target address or descriptive label for title
+                    addr_elem = card.locator('[data-testid="card-address"], .card-address, div.address').first
+                    if addr_elem.count() > 0 and addr_elem.inner_text().strip():
+                        title = addr_elem.inner_text().strip().replace("\n", ", ")
+                    else:
+                        lines = [l.strip() for l in card_text.split("\n") if len(l.strip()) > 3 and not l.startswith("$")]
+                        title = lines[0] if lines else "Vilas County Lake Property"
 
                     if item_id not in seen_items:
                         seen_items[item_id] = price
@@ -210,11 +221,9 @@ def run_scraper():
 
     print(f"Scan complete. Total queue length for email dispatch: {len(new_matches)}")
 
-    # Dispatch Email
     if new_matches:
         send_email(matches=new_matches)
 
-    # Save state to track seen IDs
     save_seen_items(seen_items)
 
 if __name__ == "__main__":
