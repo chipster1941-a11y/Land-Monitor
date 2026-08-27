@@ -98,50 +98,43 @@ def run_scraper():
                 print(f"Warning: Failed to load storage_state.json: {e}")
 
         context = browser.new_context(**context_args)
-
-        # Inject Nextdoor session cookie cleanly
-        if NEXTDOOR_SESSION_ID:
-            try:
-                context.add_cookies([{
-                    "name": "sessionid",
-                    "value": str(NEXTDOOR_SESSION_ID).strip(),
-                    "url": "https://nextdoor.com"
-                }])
-                print("Injected NEXTDOOR_SESSION_ID cookie into browser context successfully.")
-            except Exception as e:
-                print(f"Warning: Could not inject Nextdoor cookie: {e}")
-
         page = context.new_page()
 
         # --- 1. SCRAPE CRAIGSLIST (TAMPA) ---
         print("Scraping Tampa Craigslist...")
         try:
             page.goto(CL_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_timeout(2000)
-            soup_cl = BeautifulSoup(page.content(), "html.parser")
-            cl_results = soup_cl.find_all("li", class_="cl-search-result")
-            print(f"Found {len(cl_results)} Craigslist listings.")
+            page.wait_for_timeout(3000)
+            
+            # Craigslist card link selector update
+            cl_cards = page.locator('a[href*="/sss/"], a[href*="/cto/"], a[href*="/bod/"]').all()
+            print(f"Found {len(cl_cards)} raw Craigslist links.")
 
-            for item in cl_results:
-                title_tag = item.find("a", class_="title") or item.find("a", href=True)
-                if not title_tag:
+            for card in cl_cards[:15]:
+                try:
+                    href = card.get_attribute("href")
+                    text = card.inner_text().strip()
+                    if not href or not text or "golf" not in text.lower():
+                        continue
+                    
+                    clean_link = href if href.startswith("http") else f"https://tampa.craigslist.org{href}"
+                    item_id = f"cl_{clean_link.split('/')[-1].replace('.html', '')}"
+
+                    lines = [line.strip() for line in text.split("\n") if line.strip()]
+                    title = lines[0]
+                    price = lines[1] if len(lines) > 1 and "$" in lines[1] else "N/A"
+
+                    if item_id not in seen_ids:
+                        seen_ids.add(item_id)
+                        new_matches.append({
+                            "source": "Craigslist",
+                            "id": item_id,
+                            "title": title,
+                            "price": price,
+                            "link": clean_link
+                        })
+                except Exception:
                     continue
-
-                link = title_tag["href"]
-                title = title_tag.get_text().strip()
-                price_tag = item.find("span", class_="price")
-                price = price_tag.get_text().strip() if price_tag else "N/A"
-                item_id = f"cl_{link.split('/')[-1].replace('.html', '')}"
-
-                if item_id not in seen_ids:
-                    seen_ids.add(item_id)
-                    new_matches.append({
-                        "source": "Craigslist",
-                        "id": item_id,
-                        "title": title,
-                        "price": price,
-                        "link": link
-                    })
         except Exception as e:
             print(f"Error scraping Craigslist: {e}")
 
@@ -182,39 +175,52 @@ def run_scraper():
         if NEXTDOOR_SESSION_ID:
             print("Scraping Nextdoor For Sale & Free...")
             try:
-                page.goto(NEXTDOOR_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
-                page.wait_for_timeout(4000)
+                # Open isolated page with cookie header to bypass add_cookies protocol errors
+                nd_page = context.new_page()
+                nd_page.set_extra_http_headers({
+                    "Cookie": f"sessionid={NEXTDOOR_SESSION_ID.strip()}"
+                })
+                
+                nd_page.goto(NEXTDOOR_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
+                nd_page.wait_for_timeout(4000)
 
-                # Find listing links on Nextdoor
-                cards = page.locator('a[href*="/for_sale_and_free/"]').all()
-                print(f"Found {len(cards)} raw Nextdoor elements.")
+                # Broader Nextdoor item link selector
+                nd_cards = nd_page.locator('a[href*="/for_sale_and_free/"], a[href*="/post/"]').all()
+                print(f"Found {len(nd_cards)} raw Nextdoor elements.")
 
-                for card in cards:
-                    href = card.get_attribute("href")
-                    if not href or "/item/" not in href:
+                for card in nd_cards:
+                    try:
+                        href = card.get_attribute("href")
+                        if not href:
+                            continue
+                        
+                        clean_link = href if href.startswith("http") else f"https://nextdoor.com{href.split('?')[0]}"
+                        item_id = f"nd_{clean_link.split('/')[-1].strip('/')}"
+
+                        text = card.inner_text()
+                        lines = [line.strip() for line in text.split("\n") if line.strip()]
+                        if not lines:
+                            continue
+
+                        price = lines[0] if "$" in lines[0] else "N/A"
+                        title = lines[1] if len(lines) > 1 else lines[0]
+
+                        if item_id not in seen_ids:
+                            seen_ids.add(item_id)
+                            new_matches.append({
+                                "source": "Nextdoor",
+                                "id": item_id,
+                                "title": title,
+                                "price": price,
+                                "link": clean_link
+                            })
+                    except Exception:
                         continue
-                    
-                    clean_link = f"https://nextdoor.com{href.split('?')[0]}"
-                    item_id = f"nd_{clean_link.split('/item/')[1].strip('/')}"
-
-                    text = card.inner_text()
-                    lines = [line.strip() for line in text.split("\n") if line.strip()]
-                    price = lines[0] if lines and "$" in lines[0] else "N/A"
-                    title = lines[1] if len(lines) > 1 else (lines[0] if lines else "Nextdoor Golf Cart")
-
-                    if item_id not in seen_ids:
-                        seen_ids.add(item_id)
-                        new_matches.append({
-                            "source": "Nextdoor",
-                            "id": item_id,
-                            "title": title,
-                            "price": price,
-                            "link": clean_link
-                        })
+                nd_page.close()
             except Exception as e:
                 print(f"Error scraping Nextdoor: {e}")
         else:
-            print("NEXTDOOR_SESSION_ID not present in environment variables. Skipping Nextdoor search.")
+            print("NEXTDOOR_SESSION_ID not present. Skipping Nextdoor search.")
 
         browser.close()
 
