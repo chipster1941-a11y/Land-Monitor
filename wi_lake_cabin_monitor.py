@@ -132,6 +132,9 @@ def run_scraper():
             page.goto(CL_CABIN_URL, wait_until="networkidle", timeout=30000)
             page.wait_for_timeout(3000)
             
+            # --- STEP 2 ADDITION: Check page title for block/captcha ---
+            print(f"Craigslist Page Title: {page.title()}")
+
             cl_items = page.locator('.cl-static-search-result, li.cl-search-result, a.main').all()
             print(f"Found {len(cl_items)} raw Craigslist result items.")
 
@@ -145,7 +148,10 @@ def run_scraper():
                         continue
                     
                     title = lines[0]
+
+                    # --- STEP 1 ADDITION: Check if title fails valid cabin keyword filter ---
                     if not is_valid_cabin(title):
+                        print(f" [Skipped - Filtered Keywords]: '{title}'")
                         continue
 
                     clean_link = href if href.startswith("http") else f"https://northernwi.craigslist.org{href}"
@@ -154,15 +160,21 @@ def run_scraper():
                     raw_price = next((l for l in lines if "$" in l), "N/A")
                     price = clean_price(raw_price)
 
+                    # --- STEP 1 ADDITION: Log item evaluation ---
                     if item_id not in seen_items:
+                        print(f" [QUEUED NEW]: '{title}' | Price: {price} | ID: {item_id}")
                         seen_items[item_id] = price
                         new_matches.append({"source": "Craigslist", "id": item_id, "title": title, "price": price, "link": clean_link, "status": "NEW"})
                         cl_added += 1
                     elif price != "N/A" and seen_items[item_id] != "N/A" and seen_items[item_id] != price:
                         old_price = seen_items[item_id]
+                        print(f" [QUEUED PRICE DROP]: '{title}' | Old: {old_price} -> New: {price}")
                         seen_items[item_id] = price
                         new_matches.append({"source": "Craigslist", "id": item_id, "title": title, "price": f"{price} (Was {old_price})", "link": clean_link, "status": "PRICE DROP"})
                         cl_added += 1
+                    else:
+                        print(f" [Skipped - Already Seen]: '{title}' (ID: {item_id})")
+
                 except Exception:
                     continue
             print(f"Craigslist section added {cl_added} items to notification queue.")
@@ -175,6 +187,7 @@ def run_scraper():
         try:
             page.goto(REALTOR_CABIN_URL, wait_until="domcontentloaded", timeout=30000)
             page.wait_for_timeout(4000)
+            print(f"Realtor.com Page Title: {page.title()}")
 
             soup_realtor = BeautifulSoup(page.content(), "html.parser")
             cards = soup_realtor.find_all("div", class_=lambda c: c and "BasePropertyCard" in c) or soup_realtor.find_all("li", class_=lambda c: c and "resrc" in c)
@@ -219,7 +232,8 @@ def run_scraper():
         try:
             page.goto(ZILLOW_CABIN_URL, wait_until="domcontentloaded", timeout=30000)
             page.wait_for_timeout(4000)
-
+            print(f"Zillow Page Title: {page.title()}")
+            
             soup_zillow = BeautifulSoup(page.content(), "html.parser")
             z_cards = soup_zillow.find_all("article", class_=lambda c: c and "property-card" in c)
             print(f"Found {len(z_cards)} Zillow cards.")
