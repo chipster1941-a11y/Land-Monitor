@@ -2,18 +2,14 @@ name: WI Lake Cabin Monitor
 
 on:
   schedule:
-    - cron: '0 */3 * * *' # Runs every 3 hours
-  workflow_dispatch:
+    - cron: '0 */6 * * *'  # Runs every 6 hours
+  workflow_dispatch:       # Allows manual trigger
 
 jobs:
-  run-monitor:
+  scrape:
     runs-on: ubuntu-latest
-
-    permissions:
-      contents: write
-
     steps:
-      - name: Check out repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -27,29 +23,19 @@ jobs:
           pip install -r requirements.txt
           playwright install chromium --with-deps
 
-          - name: Run WI Lake Cabin Monitor
-          env:
-            EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
-            EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-            EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
-            SENDER_EMAIL: ${{ secrets.EMAIL_SENDER }}
-            SENDER_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-            RECIPIENT_EMAIL: ${{ secrets.EMAIL_RECEIVER }}
-          run: python wi_lake_cabin_monitor.py
+      - name: Run WI Lake Cabin Monitor
+        env:
+          EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
+          SENDER_EMAIL: ${{ secrets.EMAIL_SENDER }}
+          SENDER_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          RECIPIENT_EMAIL: ${{ secrets.EMAIL_RECEIVER }}
+        run: python wi_lake_cabin_monitor.py
 
-      # 2. This NEW step saves the updated JSON file back to your repo
-      - name: Commit and Push Price History
+      - name: Commit and push changes to state
         run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          touch lake_cabin_history.json
-          git add lake_cabin_history.json
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Update lake cabin price history" && git push)
-
-      - name: Save seen listings back to GitHub
-        run: |
-          touch seen_cabins.txt
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add seen_cabins.txt
-          git diff --staged --quiet || (git commit -m "Auto-update seen WI cabins [skip ci]" && git push)
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add seen_cabin_ids.json || true
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update seen cabin IDs state" && git push)
