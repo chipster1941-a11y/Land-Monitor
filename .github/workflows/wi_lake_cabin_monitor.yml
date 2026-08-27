@@ -27,20 +27,15 @@ jobs:
           pip install -r requirements.txt
           playwright install chromium --with-deps
 
-      - name: Run WI Lake Cabin Monitor
-        env:
-          EMAIL_SENDER: ${{ secrets.SENDER_EMAIL }}
-          EMAIL_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
-          EMAIL_RECEIVER: ${{ secrets.RECIPIENT_EMAIL }}
-        run: python wi_lake_cabin_monitor.py
-
-        # 1. This step runs your Python script
-      - name: Run Lake Cabin Monitor
-        env:
-          EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
-          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-          EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
-        run: python wi_lake_cabin_monitor.py
+          - name: Run WI Lake Cabin Monitor
+          env:
+            EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
+            EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+            EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
+            SENDER_EMAIL: ${{ secrets.EMAIL_SENDER }}
+            SENDER_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+            RECIPIENT_EMAIL: ${{ secrets.EMAIL_RECEIVER }}
+          run: python wi_lake_cabin_monitor.py
 
       # 2. This NEW step saves the updated JSON file back to your repo
       - name: Commit and Push Price History
