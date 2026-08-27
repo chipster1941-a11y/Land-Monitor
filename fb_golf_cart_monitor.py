@@ -100,12 +100,14 @@ def run_scraper():
         context = browser.new_context(**context_args)
 
         # Inject Nextdoor session cookie if available
-        # Inject Nextdoor session cookie if available
         if NEXTDOOR_SESSION_ID:
             context.add_cookies([{
                 "name": "sessionid",
-                "value": NEXTDOOR_SESSION_ID,
-                "url": "https://nextdoor.com"
+                "value": NEXTDOOR_SESSION_ID.strip(),
+                "domain": "nextdoor.com",
+                "path": "/",
+                "secure": True,
+                "httpOnly": True
             }])
             print("Injected NEXTDOOR_SESSION_ID cookie into browser context.")
 
