@@ -8,6 +8,7 @@ from playwright.sync_api import sync_playwright
 
 # --- CONFIGURATION ---
 STATE_FILE = "seen_cabin_ids.json"
+# Removed hardcoded quotes (%22) from the search query
 CL_CABIN_URL = "https://northernwi.craigslist.org/search/rea?query=lake+cabin"
 REALTOR_CABIN_URL = "https://www.realtor.com/realestateandhomes-search/Vilas-County_WI/type-single-family-home/waterfront"
 
@@ -109,21 +110,20 @@ def run_scraper():
             page.wait_for_timeout(3000)
             
             print(f"Craigslist Page Title: {page.title()}")
-            cl_items = page.locator('ol.cl-static-search-results > li, li.cl-search-result, div.cl-search-result').all()
-            if not cl_items:
-                cl_items = page.locator('a.main, a.cl-app-anchor').all()
-
+            cl_items = page.locator('ol.cl-static-search-results > li, li.cl-search-result, div.cl-search-result, a.main').all()
             print(f"Found {len(cl_items)} raw Craigslist result items.")
 
             for item in cl_items[:40]:
                 try:
-                    # Get anchor tag directly for title and link
+                    text = item.inner_text().strip()
                     link_elem = item if item.evaluate("el => el.tagName === 'A'") else item.locator("a").first
                     href = link_elem.get_attribute("href")
-                    title = link_elem.inner_text().strip()
-
-                    if not href or not title:
+                    
+                    if not href or not text:
                         continue
+                    
+                    lines = [line.strip() for line in text.split("\n") if line.strip()]
+                    title = lines[0] if lines else "Northern WI Property"
 
                     if not is_valid_cabin(title):
                         continue
@@ -131,9 +131,8 @@ def run_scraper():
                     clean_link = href if href.startswith("http") else f"https://northernwi.craigslist.org{href}"
                     item_id = extract_clean_id(clean_link, prefix="cl")
                     
-                    full_text = item.inner_text()
-                    price_match = re.search(r'\$[\d,]+', full_text)
-                    price = price_match.group(0) if price_match else "N/A"
+                    raw_price = next((l for l in lines if "$" in l), "N/A")
+                    price = clean_price(raw_price)
 
                     if item_id not in seen_items:
                         seen_items[item_id] = price
@@ -146,7 +145,7 @@ def run_scraper():
                         new_matches.append({"source": "Craigslist", "id": item_id, "title": title, "price": f"{price} (Was {old_price})", "link": clean_link, "status": "PRICE DROP"})
                         cl_added += 1
                         print(f"  + Price Drop CL: {title} ({price})")
-                except Exception as e:
+                except Exception:
                     continue
             print(f"Craigslist section added {cl_added} items to notification queue.")
         except Exception as e:
@@ -156,18 +155,27 @@ def run_scraper():
         print("Scraping Realtor.com...")
         realtor_added = 0
         try:
-            page.goto(REALTOR_CABIN_URL, wait_until="networkidle", timeout=35000)
-            page.wait_for_timeout(5000)
+            page.goto(REALTOR_CABIN_URL, wait_until="domcontentloaded", timeout=35000)
+            page.wait_for_timeout(4000)
             
+            # Scroll down to trigger lazy loading of property cards
+            page.mouse.wheel(0, 1500)
+            page.wait_for_timeout(2000)
+
             print(f"Realtor Page Title: {page.title()}")
-            cards = page.locator('div[id^="property-card"], div[data-testid="property-card"], article[data-testid="property-card"]').all()
+            cards = page.locator('div[data-testid="property-card"], article[data-testid="property-card"], div.BasePropertyCard').all()
+            if not cards:
+                cards = page.locator('a[href*="/realestateandhomes-detail/"]').all()
+
             print(f"Found {len(cards)} raw Realtor.com result items.")
 
             for card in cards[:25]:
                 try:
                     card_text = card.inner_text().strip()
-                    link_elem = card.locator('a[href*="/realestateandhomes-detail/"]').first
-                    href = link_elem.get_attribute("href") if link_elem.count() > 0 else None
+                    href = card.get_attribute("href") if card.evaluate("el => el.tagName === 'A'") else None
+                    if not href:
+                        link_elem = card.locator('a[href*="/realestateandhomes-detail/"]').first
+                        href = link_elem.get_attribute("href") if link_elem.count() > 0 else None
                     
                     if not href:
                         continue
@@ -178,7 +186,6 @@ def run_scraper():
                     price_match = re.search(r'\$[\d,]+', card_text)
                     price = price_match.group(0) if price_match else "N/A"
 
-                    # Clean address/title extraction
                     text_lines = [l.strip() for l in card_text.split("\n") if len(l.strip()) > 5 and "$" not in l]
                     title = text_lines[0] if text_lines else "Vilas County Lake Property"
 
@@ -205,7 +212,7 @@ def run_scraper():
 
     # Dispatch Email
     if new_matches:
-        send_email(new_matches)
+        send_email(matches=new_matches)
 
     # Save state to track seen IDs
     save_seen_items(seen_items)
