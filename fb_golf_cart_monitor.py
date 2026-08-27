@@ -9,8 +9,8 @@ from playwright.sync_api import sync_playwright
 
 # Search URLs for Tampa, FL Region
 FB_SEARCH_URL = "https://www.facebook.com/marketplace/tampa/search?query=golf%20cart&exact=false"
-CL_SEARCH_URL = "https://tampa.craigslist.org/search/sss?query=golf%20cart"
-NEXTDOOR_SEARCH_URL = "https://nextdoor.com/for_sale_and_free/?query=golf%20cart"
+CL_SEARCH_URL = "https://tampa.craigslist.org/search/sss?query=golf+cart#search=1~gallery~0~0"
+NEXTDOOR_SEARCH_URL = "https://nextdoor.com/search/?query=golf%20cart"
 
 # Email & Session Configuration
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL") or os.environ.get("EMAIL_SENDER")
@@ -73,7 +73,7 @@ def run_scraper():
             "viewport": {'width': 1280, 'height': 800}
         }
 
-        # Load & sanitize Facebook storage_state.json if present
+        # Load Facebook storage_state.json if present
         if os.path.exists("storage_state.json"):
             try:
                 with open("storage_state.json", "r", encoding="utf-8") as f:
@@ -103,18 +103,22 @@ def run_scraper():
         # --- 1. SCRAPE CRAIGSLIST (TAMPA) ---
         print("Scraping Tampa Craigslist...")
         try:
-            page.goto(CL_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
+            page.goto(CL_SEARCH_URL, wait_until="networkidle", timeout=30000)
             page.wait_for_timeout(3000)
             
-            # Craigslist card link selector update
-            cl_cards = page.locator('a[href*="/sss/"], a[href*="/cto/"], a[href*="/bod/"]').all()
-            print(f"Found {len(cl_cards)} raw Craigslist links.")
+            # Select gallery & list layout elements on modern Craigslist
+            cl_items = page.locator('.cl-static-search-result, li.cl-search-result').all()
+            if not cl_items:
+                cl_items = page.locator('a.main').all()
 
-            for card in cl_cards[:15]:
+            print(f"Found {len(cl_items)} Craigslist result items.")
+
+            for item in cl_items[:20]:
                 try:
-                    href = card.get_attribute("href")
-                    text = card.inner_text().strip()
-                    if not href or not text or "golf" not in text.lower():
+                    text = item.inner_text().strip()
+                    href = item.get_attribute("href") or item.locator("a").get_attribute("href")
+                    
+                    if not href or "golf" not in text.lower():
                         continue
                     
                     clean_link = href if href.startswith("http") else f"https://tampa.craigslist.org{href}"
@@ -122,7 +126,7 @@ def run_scraper():
 
                     lines = [line.strip() for line in text.split("\n") if line.strip()]
                     title = lines[0]
-                    price = lines[1] if len(lines) > 1 and "$" in lines[1] else "N/A"
+                    price = next((l for l in lines if "$" in l), "N/A")
 
                     if item_id not in seen_ids:
                         seen_ids.add(item_id)
@@ -175,35 +179,37 @@ def run_scraper():
         if NEXTDOOR_SESSION_ID:
             print("Scraping Nextdoor For Sale & Free...")
             try:
-                # Open isolated page with cookie header to bypass add_cookies protocol errors
                 nd_page = context.new_page()
                 nd_page.set_extra_http_headers({
                     "Cookie": f"sessionid={NEXTDOOR_SESSION_ID.strip()}"
                 })
                 
-                nd_page.goto(NEXTDOOR_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
+                # Use main search endpoint to prevent redirects to feed
+                nd_page.goto(NEXTDOOR_SEARCH_URL, wait_until="networkidle", timeout=30000)
                 nd_page.wait_for_timeout(4000)
 
-                # Broader Nextdoor item link selector
+                # Filter specifically for item listings within search result container
                 nd_cards = nd_page.locator('a[href*="/for_sale_and_free/"], a[href*="/post/"]').all()
                 print(f"Found {len(nd_cards)} raw Nextdoor elements.")
 
                 for card in nd_cards:
                     try:
                         href = card.get_attribute("href")
-                        if not href:
+                        text = card.inner_text().strip()
+                        
+                        # Guard against feed elements or navigation links missing 'golf'
+                        if not href or "golf" not in text.lower():
                             continue
                         
                         clean_link = href if href.startswith("http") else f"https://nextdoor.com{href.split('?')[0]}"
                         item_id = f"nd_{clean_link.split('/')[-1].strip('/')}"
 
-                        text = card.inner_text()
                         lines = [line.strip() for line in text.split("\n") if line.strip()]
                         if not lines:
                             continue
 
-                        price = lines[0] if "$" in lines[0] else "N/A"
-                        title = lines[1] if len(lines) > 1 else lines[0]
+                        price = next((l for l in lines if "$" in l), "N/A")
+                        title = lines[0] if lines[0] != price else (lines[1] if len(lines) > 1 else "Nextdoor Item")
 
                         if item_id not in seen_ids:
                             seen_ids.add(item_id)
