@@ -6,13 +6,17 @@ from playwright.async_api import async_playwright
 
 SEEN_FILE = "seen_timeshares.json"
 
-# Constraints
+# Max price limit ($1,000)
 MAX_PRICE = 1000.00
-MAX_MAINTENANCE_FEE = 1400.00
 
-# Target Keywords for Interval International & 2BR Lockouts
-II_KEYWORDS = ["interval international", "marriott", "westin", "sheraton", "vistana", "hyatt", "disney", "dvc", "worldmark", "diamond"]
-TARGET_FEATURES = ["lockout", "lock-out", "2 bedroom", "2bd", "2br", "lockoff", "lock-off"]
+# High-value Interval International (II) brand keywords
+II_BRANDS = [
+    "marriott", "westin", "sheraton", "vistana", "hyatt", 
+    "disney", "dvc", "welk", "diamond", "interval", "tahiti", "worldmark"
+]
+
+# Features your parents want
+FEATURES = ["lockout", "lock-out", "lockoff", "lock-off", "2br", "2 bed", "2-bedroom", "2 bedroom"]
 
 def load_seen_ids():
     if os.path.exists(SEEN_FILE):
@@ -24,141 +28,97 @@ def save_seen_ids(seen_ids):
     with open(SEEN_FILE, "w") as f:
         json.dump(list(seen_ids), f, indent=2)
 
-def parse_price(price_str: str) -> float:
-    """Extract float price from string like '$800.00' or 'FREE'."""
-    if not price_str or "free" in price_str.lower():
+def extract_price(text: str) -> float:
+    """Detects price or treats 'FREE' / 'BARGAIN' as $0."""
+    text_lower = text.lower()
+    if "free" in text_lower or "$0" in text_lower:
         return 0.0
-    cleaned = re.sub(r"[^\d.]", "", price_str)
-    try:
-        return float(cleaned)
-    except ValueError:
-        return 999999.0  # High default to skip invalid parses
-
-async def scrape_redweek(page, seen_ids):
-    listings = []
-    # Search for lockout / 2bd resales on RedWeek
-    url = "https://www.redweek.com/search?q=lockout+resale"
-    print(f"Scraping RedWeek: {url}")
-    await page.goto(url, wait_until="domcontentloaded")
     
-    cards = await page.query_selector_all(".posting-card, .listing-item, .search-result")
-    for card in cards:
-        text = await card.inner_text()
-        text_lower = text.lower()
+    match = re.search(r"\$([\d,]+)", text)
+    if match:
+        try:
+            return float(match.group(1).replace(",", ""))
+        except ValueError:
+            return 0.0
+    return 0.0
 
-        # Extract link & title
-        link_elem = await card.query_selector("a")
-        href = await link_elem.get_attribute("href") if link_elem else ""
-        listing_id = f"redweek_{href}"
-
-        if not href or listing_id in seen_ids:
-            continue
-
-        # Extract price
-        price_elem = await card.query_selector(".price, .posting-price")
-        price_text = await price_elem.inner_text() if price_elem else "$0"
-        price = parse_price(price_text)
-
-        # Apply Price Filter
-        if price > MAX_PRICE:
-            continue
-
-        # Apply Maintenance Fee Check if fee listed in card text
-        mf_match = re.search(r"maint(?:enance)?\s*fee:?\s*\$?([\d,]+)", text_lower)
-        if mf_match:
-            mf_val = float(mf_match.group(1).replace(",", ""))
-            if mf_val > MAX_MAINTENANCE_FEE:
-                continue
-
-        # Feature Check (2BR / Lockout or Interval International)
-        has_ii = any(k in text_lower for k in II_KEYWORDS)
-        has_feat = any(f in text_lower for f in TARGET_FEATURES)
-
-        if has_ii or has_feat:
-            seen_ids.add(listing_id)
-            full_url = f"https://www.redweek.com{href}" if href.startswith("/") else href
-            listings.append({
-                "source": "RedWeek",
-                "title": text.split("\n")[0].strip(),
-                "price": f"${price:.2f}",
-                "url": full_url
-            })
-    return listings
-
-async def scrape_tug(page, seen_ids):
+async def scrape_tug_bargains(page, seen_ids):
     listings = []
-    # TUG Marketplace Search for low cost / bargain resales
-    url = "https://tug2.com/timesharemarketplace"
-    print(f"Scraping TUG Marketplace: {url}")
-    await page.goto(url, wait_until="domcontentloaded")
-
-    rows = await page.query_selector_all("tr, .marketplace-listing, .ad-item")
-    for row in rows:
-        text = await row.inner_text()
-        text_lower = text.lower()
-
-        link_elem = await row.query_selector("a")
-        href = await link_elem.get_attribute("href") if link_elem else ""
+    # TUG Free & Bargain Timeshares forum board
+    url = "https://tugbbs.com/forums/forums/free-timeshares.55/"
+    print(f"Scraping TUG Free/Bargain Forum: {url}")
+    
+    await page.goto(url, wait_until="networkidle")
+    
+    # Select forum thread rows
+    threads = await page.query_selector_all(".structItem--thread")
+    
+    for thread in threads:
+        title_elem = await thread.query_selector(".structItem-title a[data-tp-primary]")
+        if not title_elem:
+            continue
+            
+        title = await title_elem.inner_text()
+        href = await title_elem.get_attribute("href")
         listing_id = f"tug_{href}"
 
-        if not href or listing_id in seen_ids:
+        if listing_id in seen_ids:
             continue
 
-        price_match = re.search(r"\$([\d,]+(?:\.\d{2})?)", text)
-        price = float(price_match.group(1).replace(",", "")) if price_match else 0.0
+        title_lower = title.lower()
 
+        # Check for price
+        price = extract_price(title)
         if price > MAX_PRICE:
             continue
 
-        # Check for Interval International or 2BR/Lockout keywords
-        has_ii = any(k in text_lower for k in II_KEYWORDS)
-        has_feat = any(f in text_lower for f in TARGET_FEATURES)
+        # Check for II brand or 2BR lockout features
+        has_ii_brand = any(brand in title_lower for brand in II_BRANDS)
+        has_feature = any(feat in title_lower for feat in FEATURES)
 
-        if has_ii or has_feat:
+        # Catch threads that match either brand OR desired unit features
+        if has_ii_brand or has_feature:
             seen_ids.add(listing_id)
-            full_url = f"https://tug2.com{href}" if href.startswith("/") else href
+            full_url = f"https://tugbbs.com{href}" if href.startswith("/") else href
+            
             listings.append({
-                "source": "TUG Marketplace",
-                "title": text.split("\n")[0].strip(),
-                "price": f"${price:.2f}",
+                "source": "TUG Bargain Forum",
+                "title": title.strip(),
+                "price": f"${price:.0f}" if price > 0 else "FREE / Bargain",
                 "url": full_url
             })
+
     return listings
 
 async def main():
     seen_ids = load_seen_ids()
-    all_new_listings = []
-
+    
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
+        # Emulate standard browser context to avoid bot detection
         context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         )
         page = await context.new_page()
 
         try:
-            rw_results = await scrape_redweek(page, seen_ids)
-            all_new_listings.extend(rw_results)
+            results = await scrape_tug_bargains(page, seen_ids)
         except Exception as e:
-            print(f"Error scraping RedWeek: {e}")
-
-        try:
-            tug_results = await scrape_tug(page, seen_ids)
-            all_new_listings.extend(tug_results)
-        except Exception as e:
-            print(f"Error scraping TUG: {e}")
+            print(f"Error executing scraper: {e}")
+            results = []
 
         await browser.close()
 
     save_seen_ids(seen_ids)
 
-    print("\n--- MATCHING RESULTS ---")
-    if all_new_listings:
-        for item in all_new_listings:
-            print(f"[{item['source']}] {item['title']} - {item['price']}")
-            print(f"   URL: {item['url']}\n")
+    print("\n================ MATCHING RESULTS ================")
+    if results:
+        for item in results:
+            print(f"[{item['source']}] {item['title']}")
+            print(f" Price: {item['price']}")
+            print(f" URL:   {item['url']}\n")
     else:
-        print("No new matching timeshare resales found under $1,000.")
+        print("No new matching bargains found on this run.")
 
 if __name__ == "__main__":
     asyncio.run(main())
