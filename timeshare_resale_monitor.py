@@ -1,7 +1,10 @@
 import json
 import os
 import re
+import smtplib
 import asyncio
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from playwright.async_api import async_playwright
 
 SEEN_FILE = "seen_timeshares.json"
@@ -25,6 +28,53 @@ def save_seen_ids(seen_ids):
     with open(SEEN_FILE, "w") as f:
         json.dump(list(seen_ids), f, indent=2)
 
+def send_email_alert(new_listings):
+    """Send HTML email via Gmail SMTP using your repository's existing secrets."""
+    sender_email = os.environ.get("EMAIL_SENDER")
+    sender_password = os.environ.get("EMAIL_PASSWORD")
+    recipient_email = os.environ.get("EMAIL_RECEIVER", sender_email)
+
+    if not sender_email or not sender_password:
+        print("Warning: EMAIL_SENDER or EMAIL_PASSWORD environment variables not set. Skipping email alert.")
+        return
+
+    subject = f"Timeshare Alert: {len(new_listings)} New Listing(s) Found!"
+    
+    html_items = ""
+    for item in new_listings:
+        html_items += f"""
+        <div style="border:1px solid #ccc; padding:12px; margin-bottom:12px; border-radius:6px;">
+            <h3 style="margin-top:0;">{item['title']}</h3>
+            <p><strong>Source:</strong> {item['source']}</p>
+            <p><strong>Asking Price:</strong> {item['price']}</p>
+            <p><strong>Maint Fee:</strong> {item['maint_fee']}</p>
+            <p><a href="{item['url']}" target="_blank">View Listing on TUG</a></p>
+        </div>
+        """
+
+    html_content = f"""
+    <html>
+      <body>
+        <h2>New Timeshare Resales Matching Your Criteria</h2>
+        {html_items}
+      </body>
+    </html>
+    """
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = sender_email
+    msg["To"] = recipient_email
+    msg.attach(MIMEText(html_content, "html"))
+
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(sender_email, sender_password)
+            server.sendmail(sender_email, recipient_email, msg.as_string())
+        print(f"Successfully sent email notification to {recipient_email}")
+    except Exception as e:
+        print(f"Failed to send email alert: {e}")
+
 def extract_price(text: str) -> float:
     text_lower = text.lower()
     if "free" in text_lower or "$0" in text_lower:
@@ -38,14 +88,12 @@ def extract_price(text: str) -> float:
     return 0.0
 
 def extract_maintenance_fee(body_text: str) -> float:
-    """Extract annual maintenance fee from the thread post text."""
     body_lower = body_text.lower()
     patterns = [
         r"maint(?:enance)?\s*(?:fee|dues)?\w*\s*:?\s*\$?([\d,]+(?:\.\d{2})?)",
         r"annual\s*dues\w*\s*:?\s*\$?([\d,]+(?:\.\d{2})?)",
         r"mf\w*\s*:?\s*\$?([\d,]+(?:\.\d{2})?)"
     ]
-    
     for pattern in patterns:
         match = re.search(pattern, body_lower)
         if match:
@@ -60,7 +108,9 @@ async def scrape_tug_bargains(page, seen_ids):
     url = "https://tugbbs.com/forums/forums/free-timeshares.55/"
     print(f"Scraping TUG Free/Bargain Forum: {url}")
     
-    await page.goto(url, wait_until="networkidle")
+    await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+    await page.wait_for_selector(".structItem--thread", timeout=15000)
+    
     threads = await page.query_selector_all(".structItem--thread")
     
     candidates = []
@@ -92,10 +142,9 @@ async def scrape_tug_bargains(page, seen_ids):
                 "url": f"https://tugbbs.com{href}" if href.startswith("/") else href
             })
 
-    # Detailed extraction step: Click into candidate posts to extract maintenance fees
     for cand in candidates:
         try:
-            await page.goto(cand["url"], wait_until="domcontentloaded")
+            await page.goto(cand["url"], wait_until="domcontentloaded", timeout=30000)
             first_post = await page.query_selector(".message-body")
             
             fee_val = 0.0
@@ -103,7 +152,6 @@ async def scrape_tug_bargains(page, seen_ids):
                 post_text = await first_post.inner_text()
                 fee_val = extract_maintenance_fee(post_text)
 
-            # Skip if maintenance fee exceeds threshold
             if fee_val > MAX_MAINTENANCE_FEE and fee_val > 0:
                 print(f"Skipping '{cand['title']}' - Maintenance fee (${fee_val:.0f}) exceeds ${MAX_MAINTENANCE_FEE:.0f}")
                 continue
@@ -148,6 +196,8 @@ async def main():
             print(f" Price:      {item['price']}")
             print(f" Maint Fee:  {item['maint_fee']}")
             print(f" URL:        {item['url']}\n")
+        
+        send_email_alert(results)
     else:
         print("No new matching bargains found under the fee and price thresholds.")
 
