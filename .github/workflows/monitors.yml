@@ -2,9 +2,8 @@ name: Property & Timeshare Monitors
 
 on:
   schedule:
-    # Runs twice daily at 12:00 AM and 12:00 PM UTC
     - cron: '0 0,12 * * *'
-  workflow_dispatch: # Allows manual trigger from GitHub Actions tab
+  workflow_dispatch:
 
 jobs:
   run-monitors:
@@ -26,14 +25,26 @@ jobs:
           playwright install chromium
 
       - name: Run Wi Property Monitor
+        env:
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
         run: python wi_property_monitor.py
         continue-on-error: true
 
       - name: Run Golf Cart Monitor
+        env:
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
         run: python fb_golf_cart_monitor.py
         continue-on-error: true
 
       - name: Run Timeshare Resale Monitor
+        env:
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
         run: python timeshare_resale_monitor.py
         continue-on-error: true
 
