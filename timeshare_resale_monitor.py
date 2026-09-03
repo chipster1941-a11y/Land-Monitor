@@ -75,16 +75,26 @@ def send_email_alert(new_listings):
     except Exception as e:
         print(f"Failed to send email alert: {e}")
 
-def extract_price(text: str) -> float:
-    text_lower = text.lower()
-    if "free" in text_lower or "$0" in text_lower:
-        return 0.0
-    match = re.search(r"\$([\d,]+)", text)
-    if match:
-        try:
-            return float(match.group(1).replace(",", ""))
-        except ValueError:
-            return 0.0
+def extract_maintenance_fee(body_text: str) -> float:
+    body_lower = body_text.lower()
+    
+    # Expanded list of terms users post on TUG
+    patterns = [
+        r"(?:maint(?:enance)?|mf|dues|hoa|fee|fees|operating)\w*\s*(?:fee|dues)?\w*\s*:?\s*\$?([\d,]+(?:\.\d{2})?)",
+        r"annual(?:ly)?\s*(?:dues|fee|cost|maint)\w*\s*:?\s*\$?([\d,]+(?:\.\d{2})?)",
+        r"\$?([\d,]+(?:\.\d{2})?)\s*(?:per year|/yr|/year|annually|annual|/maint|maint)"
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, body_lower)
+        if match:
+            try:
+                val = float(match.group(1).replace(",", ""))
+                # Filter out obvious false positives (e.g., year 2026 or small numbers like $2)
+                if 100 <= val <= 5000:
+                    return val
+            except ValueError:
+                continue
     return 0.0
 
 def extract_maintenance_fee(body_text: str) -> float:
