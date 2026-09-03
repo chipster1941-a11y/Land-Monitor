@@ -29,7 +29,7 @@ def save_seen_ids(seen_ids):
         json.dump(list(seen_ids), f, indent=2)
 
 def send_email_alert(new_listings):
-    """Send HTML email via Gmail SMTP using your repository's existing secrets."""
+    """Send HTML email via Gmail SMTP using repository secrets."""
     sender_email = os.environ.get("EMAIL_SENDER")
     sender_password = os.environ.get("EMAIL_PASSWORD")
     recipient_email = os.environ.get("EMAIL_RECEIVER", sender_email)
@@ -75,10 +75,22 @@ def send_email_alert(new_listings):
     except Exception as e:
         print(f"Failed to send email alert: {e}")
 
+def extract_price(text: str) -> float:
+    text_lower = text.lower()
+    if "free" in text_lower or "$0" in text_lower:
+        return 0.0
+    match = re.search(r"\$([\d,]+)", text)
+    if match:
+        try:
+            return float(match.group(1).replace(",", ""))
+        except ValueError:
+            return 0.0
+    return 0.0
+
 def extract_maintenance_fee(body_text: str) -> float:
     body_lower = body_text.lower()
     
-    # Expanded list of terms users post on TUG
+    # Expanded patterns to catch varied user formats on TUG
     patterns = [
         r"(?:maint(?:enance)?|mf|dues|hoa|fee|fees|operating)\w*\s*(?:fee|dues)?\w*\s*:?\s*\$?([\d,]+(?:\.\d{2})?)",
         r"annual(?:ly)?\s*(?:dues|fee|cost|maint)\w*\s*:?\s*\$?([\d,]+(?:\.\d{2})?)",
@@ -90,25 +102,9 @@ def extract_maintenance_fee(body_text: str) -> float:
         if match:
             try:
                 val = float(match.group(1).replace(",", ""))
-                # Filter out obvious false positives (e.g., year 2026 or small numbers like $2)
+                # Filter out years like 2026 or small numbers under $100
                 if 100 <= val <= 5000:
                     return val
-            except ValueError:
-                continue
-    return 0.0
-
-def extract_maintenance_fee(body_text: str) -> float:
-    body_lower = body_text.lower()
-    patterns = [
-        r"maint(?:enance)?\s*(?:fee|dues)?\w*\s*:?\s*\$?([\d,]+(?:\.\d{2})?)",
-        r"annual\s*dues\w*\s*:?\s*\$?([\d,]+(?:\.\d{2})?)",
-        r"mf\w*\s*:?\s*\$?([\d,]+(?:\.\d{2})?)"
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, body_lower)
-        if match:
-            try:
-                return float(match.group(1).replace(",", ""))
             except ValueError:
                 continue
     return 0.0
