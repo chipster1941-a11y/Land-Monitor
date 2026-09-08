@@ -1,283 +1,274 @@
-import json
+#!/usr/bin/env python3
+"""
+timeshare_resale_monitor.py
+Monitors timeshare resale listings, HOA direct lists, and PDF announcements.
+Scores listings based on exchange trading power, maintenance-to-value ratio,
+and natural disaster / special assessment risk.
+"""
+
 import os
 import re
-import smtplib
-import asyncio
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from playwright.async_api import async_playwright
+import json
+import logging
+from typing import List, Dict, Any, Optional
+from bs4 import BeautifulSoup
+import requests
 
+# PDF Parsing Support
+try:
+    import pypdf
+except ImportError:
+    pypdf = None
+
+# Configure Logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
+
+# Configuration File Paths
 SEEN_FILE = "seen_timeshares.json"
-MAX_PRICE = 1000.00
-MAX_MAINTENANCE_FEE = 1400.00
 
-II_BRANDS = [
-    "marriott", "westin", "sheraton", "vistana", "hyatt", 
-    "disney", "dvc", "welk", "diamond", "interval", "tahiti", "worldmark"
+# Target Regions and Scoring Weights
+HIGH_TRADING_POWER_LOCATIONS = {
+    "hawaii": ["maui", "kauai", "oahu", "honolulu", "kona"],
+    "ski": ["breckenridge", "vail", "park city", "aspen", "lake tahoe", "steamboat"],
+    "coastal_ca": ["newport coast", "carlsbad", "monterey", "avila beach"],
+    "east_coast_beach": ["hilton head", "outer banks", "myrtle beach", "cape cod"]
+}
+
+HIDDEN_GEM_LOCATIONS = [
+    "sedona", "scottsdale", "white mountains", "lincoln nh", 
+    "duck nc", "kitty hawk", "incline village", "bar Harbor", "kennebunkport"
 ]
 
-# Expanded to include 1-bedroom unit variations alongside 2BR/lockouts
-FEATURES = [
-    "lockout", "lock-out", "lockoff", "lock-off", 
-    "2br", "2 bed", "2-bedroom", "2 bedroom",
-    "1br", "1 bed", "1-bedroom", "1 bedroom"
-]
+DILUTED_LOCATIONS = ["orlando", "kissimmee", "las vegas", "branson", "williamsburg"]
 
-def load_seen_ids():
-    if os.path.exists(SEEN_FILE):
-        with open(SEEN_FILE, "r") as f:
-            return set(json.load(f))
-    return set()
+HIGH_VALUE_WEEKS = {
+    "ski_peak": list(range(1, 11)),
+    "summer_peak": list(range(24, 33)),
+    "foliage_peak": list(range(38, 42)),
+    "holiday_weeks": [51, 52]
+}
 
-def save_seen_ids(seen_ids):
-    with open(SEEN_FILE, "w") as f:
-        json.dump(list(seen_ids), f, indent=2)
+COASTAL_RISK_ZONES = ["florida", "fl", "south carolina", "sc", "north carolina", "nc", "gulf"]
 
-def send_email_alert(new_listings):
-    """Send HTML email via Gmail SMTP using repository secrets."""
-    sender_email = os.environ.get("EMAIL_SENDER")
-    sender_password = os.environ.get("EMAIL_PASSWORD")
-    recipient_email = os.environ.get("EMAIL_RECEIVER", sender_email)
 
-    if not sender_email or not sender_password:
-        print("Warning: EMAIL_SENDER or EMAIL_PASSWORD environment variables not set. Skipping email alert.")
-        return
+class TimeshareMonitor:
+    def __init__(self, seen_filepath: str = SEEN_FILE):
+        self.seen_filepath = seen_filepath
+        self.seen_ids = self._load_seen_ids()
 
-    subject = f"Timeshare Alert: {len(new_listings)} New Listing(s) Found!"
-    
-    html_items = ""
-    for item in new_listings:
-        html_items += f"""
-        <div style="border:1px solid #ccc; padding:12px; margin-bottom:12px; border-radius:6px;">
-            <h3 style="margin-top:0;">{item['title']}</h3>
-            <p><strong>Source:</strong> {item['source']}</p>
-            <p><strong>Asking Price:</strong> {item['price']}</p>
-            <p><strong>Maint Fee:</strong> {item['maint_fee']}</p>
-            <p><a href="{item['url']}" target="_blank">View Listing</a></p>
-        </div>
-        """
-
-    html_content = f"""
-    <html>
-      <body>
-        <h2>New Timeshare Resales Matching Your Criteria</h2>
-        {html_items}
-      </body>
-    </html>
-    """
-
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = sender_email
-    msg["To"] = recipient_email
-    msg.attach(MIMEText(html_content, "html"))
-
-    try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(sender_email, sender_password)
-            server.sendmail(sender_email, recipient_email, msg.as_string())
-        print(f"Successfully sent email notification to {recipient_email}")
-    except Exception as e:
-        print(f"Failed to send email alert: {e}")
-
-def extract_price(text: str) -> float:
-    text_lower = text.lower()
-    if "free" in text_lower or "$0" in text_lower:
-        return 0.0
-    match = re.search(r"\$([\d,]+)", text)
-    if match:
-        try:
-            return float(match.group(1).replace(",", ""))
-        except ValueError:
-            return 0.0
-    return 0.0
-
-def extract_maintenance_fee(body_text: str) -> float:
-    body_lower = body_text.lower()
-    patterns = [
-        r"(?:maint(?:enance)?|mf|dues|hoa|fee|fees|operating)\w*\s*(?:fee|dues)?\w*\s*:?\s*\$?([\d,]+(?:\.\d{2})?)",
-        r"annual(?:ly)?\s*(?:dues|fee|cost|maint)\w*\s*:?\s*\$?([\d,]+(?:\.\d{2})?)",
-        r"\$?([\d,]+(?:\.\d{2})?)\s*(?:per year|/yr|/year|annually|annual|/maint|maint)"
-    ]
-    
-    for pattern in patterns:
-        match = re.search(pattern, body_lower)
-        if match:
+    def _load_seen_ids(self) -> set:
+        """Loads previously processed listing IDs, supporting both list and dict JSON structures."""
+        if os.path.exists(self.seen_filepath):
             try:
-                val = float(match.group(1).replace(",", ""))
-                if 100 <= val <= 5000:
-                    return val
-            except ValueError:
-                continue
-    return 0.0
+                with open(self.seen_filepath, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, list):
+                        return set(data)
+                    elif isinstance(data, dict):
+                        return set(data.get("seen_ids", []))
+            except Exception as e:
+                logging.error(f"Error loading {self.seen_filepath}: {e}")
+                return set()
+        return set()
 
-async def scrape_tug_bargains(page, seen_ids):
-    listings = []
-    url = "https://tugbbs.com/forums/forums/free-timeshares.55/"
-    print(f"Scraping TUG Free/Bargain Forum: {url}")
-    
-    await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-    await page.wait_for_selector(".structItem--thread", timeout=15000)
-    
-    threads = await page.query_selector_all(".structItem--thread")
-    
-    candidates = []
-    for thread in threads:
-        title_elem = await thread.query_selector(".structItem-title a[data-tp-primary]")
-        if not title_elem:
-            continue
-            
-        title = await title_elem.inner_text()
-        href = await title_elem.get_attribute("href")
-        listing_id = f"tug_{href}"
-
-        if listing_id in seen_ids:
-            continue
-
-        title_lower = title.lower()
-        price = extract_price(title)
-        if price > MAX_PRICE:
-            continue
-
-        has_ii_brand = any(brand in title_lower for brand in II_BRANDS)
-        has_feature = any(feat in title_lower for feat in FEATURES)
-
-        if has_ii_brand or has_feature:
-            candidates.append({
-                "listing_id": listing_id,
-                "title": title.strip(),
-                "price": price,
-                "url": f"https://tugbbs.com{href}" if href.startswith("/") else href
-            })
-
-    for cand in candidates:
+    def save_seen_ids(self):
+        """Persists seen IDs back to local storage."""
         try:
-            await page.goto(cand["url"], wait_until="domcontentloaded", timeout=30000)
-            first_post = await page.query_selector(".message-body")
-            
-            fee_val = 0.0
-            if first_post:
-                post_text = await first_post.inner_text()
-                fee_val = extract_maintenance_fee(post_text)
-
-            if fee_val > MAX_MAINTENANCE_FEE and fee_val > 0:
-                print(f"Skipping '{cand['title']}' - Maintenance fee (${fee_val:.0f}) exceeds ${MAX_MAINTENANCE_FEE:.0f}")
-                continue
-
-            seen_ids.add(cand["listing_id"])
-            listings.append({
-                "source": "TUG Bargain Forum",
-                "title": cand["title"],
-                "price": f"${cand['price']:.0f}" if cand['price'] > 0 else "FREE / Bargain",
-                "maint_fee": f"${fee_val:.0f}/year" if fee_val > 0 else "Not specified",
-                "url": cand["url"]
-            })
+            with open(self.seen_filepath, "w", encoding="utf-8") as f:
+                json.dump({"seen_ids": list(self.seen_ids)}, f, indent=2)
         except Exception as e:
-            print(f"Error checking TUG thread details for {cand['url']}: {e}")
+            logging.error(f"Error saving {self.seen_filepath}: {e}")
 
-    return listings
+    def evaluate_trading_power(self, listing: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Calculates a score (0-100) based on location, unit size, week number,
+        and flags potential hidden gems or assessment risks.
+        """
+        score = 50
+        flags = []
 
-async def scrape_redweek_bargains(page, seen_ids):
-    listings = []
-    url = "https://www.redweek.com/featured/bargain-timeshares-for-sale"
-    print(f"Scraping RedWeek Bargain Resales: {url}")
+        location = listing.get("location", "").lower()
+        resort_name = listing.get("resort_name", "").lower()
+        title_desc = f"{resort_name} {location} {listing.get('description', '')}".lower()
+        week = listing.get("week_number")
+        maint_fee = listing.get("maintenance_fee", 0.0)
+        unit_bedrooms = listing.get("bedrooms", 1)
 
-    try:
-        await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-        await page.wait_for_timeout(3000)
-        
-        cards = await page.query_selector_all(".posting-item, .resort-item, article")
-        if not cards:
-            cards = await page.query_selector_all("a[href*='/timeshare-item/'], a[href*='/posting/']")
+        # 1. Location Evaluation
+        is_high_demand = False
+        for category, loc_list in HIGH_TRADING_POWER_LOCATIONS.items():
+            if any(loc in title_desc for loc in loc_list):
+                score += 20
+                is_high_demand = True
+                flags.append(f"High Demand Area ({category})")
+                break
 
-        for card in cards:
-            title_elem = await card.query_selector("h3, h4, .title, .resort-name")
-            link_elem = await card.query_selector("a") if not title_elem else title_elem
-            
-            if not link_elem:
-                continue
+        if any(gem in title_desc for gem in HIDDEN_GEM_LOCATIONS):
+            score += 25
+            flags.append("Hidden Gem Region")
 
-            title = await link_elem.inner_text() if title_elem else await card.inner_text()
-            title = title.strip().split("\n")[0]
-            href = await link_elem.get_attribute("href")
-            
-            if not href:
-                continue
+        if any(diluted in title_desc for diluted in DILUTED_LOCATIONS):
+            score -= 25
+            flags.append("Diluted Market (High Supply)")
 
-            listing_id = f"redweek_{href}"
-            if listing_id in seen_ids:
-                continue
+        # 2. Week Analysis
+        if isinstance(week, int):
+            if week in HIGH_VALUE_WEEKS["holiday_weeks"]:
+                score += 20
+                flags.append("Holiday Week (Weeks 51-52)")
+            elif week in HIGH_VALUE_WEEKS["ski_peak"] and "ski" in flags:
+                score += 15
+                flags.append("Peak Ski Week")
+            elif week in HIGH_VALUE_WEEKS["summer_peak"]:
+                score += 15
+                flags.append("Peak Summer Week")
+            elif week in HIGH_VALUE_WEEKS["foliage_peak"]:
+                score += 10
+                flags.append("Peak Foliage Week")
 
-            card_text = await card.inner_text()
-            card_lower = card_text.lower()
+        # 3. Unit Size & Capacity
+        if unit_bedrooms >= 2:
+            score += 10
+            flags.append(f"{unit_bedrooms}-Bed Unit")
+        if "lock-off" in title_desc or "lockoff" in title_desc:
+            score += 10
+            flags.append("Lock-off Unit")
 
-            price = extract_price(card_text)
-            if price > MAX_PRICE and price != 0.0:
-                continue
+        # 4. Assessment and Risk Checking (Using regex word boundaries to prevent false matches)
+        coastal_pattern = r"\b(florida|fl|south carolina|sc|north carolina|nc|gulf)\b"
+        if re.search(coastal_pattern, title_desc, re.IGNORECASE):
+            flags.append("Coastal Hurricane Hazard Zone")
 
-            has_ii_brand = any(brand in card_lower for brand in II_BRANDS)
-            has_feature = any(feat in card_lower for feat in FEATURES)
+        active_levy_keywords = ["assessment pending", "special assessment", "roof assessment", "owner levy"]
+        if any(kw in title_desc for kw in active_levy_keywords):
+            score -= 30
+            flags.append("WARNING: Active or Pending Levy/Special Assessment")
 
-            if has_ii_brand or has_feature:
-                fee_val = extract_maintenance_fee(card_text)
-                if fee_val > MAX_MAINTENANCE_FEE and fee_val > 0:
-                    print(f"Skipping RedWeek '{title}' - Fee (${fee_val:.0f}) exceeds ${MAX_MAINTENANCE_FEE:.0f}")
-                    continue
+        # 5. Maintenance Fee Efficiency Ratio
+        if maint_fee > 0 and maint_fee < 1000 and (is_high_demand or "Hidden Gem Region" in flags):
+            score += 10
+            flags.append("Low Maintenance Fee (< $1,000)")
 
-                full_url = f"https://www.redweek.com{href}" if href.startswith("/") else href
-                seen_ids.add(listing_id)
-                listings.append({
-                    "source": "RedWeek Bargains",
-                    "title": title,
-                    "price": f"${price:.0f}" if price > 0 else "Bargain / See Listing",
-                    "maint_fee": f"${fee_val:.0f}/year" if fee_val > 0 else "See listing details",
-                    "url": full_url
+        # Final Score Cap
+        listing["trading_power_score"] = max(0, min(100, score))
+        listing["analysis_flags"] = flags
+        return listing
+
+    def parse_hoa_pdf_list(self, pdf_path_or_url: str) -> List[Dict[str, Any]]:
+        """Parses HOA direct resale inventory published as PDF files."""
+        extracted_listings = []
+        if not pypdf:
+            logging.warning("pypdf not installed. Skipping PDF parsing.")
+            return extracted_listings
+
+        try:
+            # Download if URL, open if file path
+            if pdf_path_or_url.startswith("http"):
+                resp = requests.get(pdf_path_or_url, timeout=10)
+                temp_pdf = "temp_hoa_list.pdf"
+                with open(temp_pdf, "wb") as f:
+                    f.write(resp.content)
+                reader = pypdf.PdfReader(temp_pdf)
+            else:
+                reader = pypdf.PdfReader(pdf_path_or_url)
+
+            text_content = ""
+            for page in reader.pages:
+                text_content += page.extract_text() + "\n"
+
+            # Simple regex parser for structured line items (e.g., Unit 102 - Week 28 - $500 - Fee: $850)
+            pattern = re.compile(
+                r"(?:Unit|Resort)\s*(?P<unit>\w+)?.*?Week\s*(?P<week>\d+).*?\$?\s*(?P<price>\d[\d,]*).*?Fee:?\s*\$?\s*(?P<fee>\d[\d,]*)",
+                re.IGNORECASE
+            )
+
+            for match in pattern.finditer(text_content):
+                item = match.groupdict()
+                listing_id = f"hoa_pdf_{item.get('unit')}_{item.get('week')}"
+                
+                extracted_listings.append({
+                    "id": listing_id,
+                    "resort_name": "HOA Direct PDF Listing",
+                    "location": "HOA Direct",
+                    "week_number": int(item["week"]) if item.get("week") else None,
+                    "price": float(item["price"].replace(",", "")) if item.get("price") else 0.0,
+                    "maintenance_fee": float(item["fee"].replace(",", "")) if item.get("fee") else 0.0,
+                    "bedrooms": 2,  # Default fallback
+                    "source": "HOA_PDF",
+                    "description": text_content[:200]
                 })
-    except Exception as e:
-        print(f"Error executing RedWeek scraper: {e}")
 
-    return listings
-
-async def main():
-    seen_ids = load_seen_ids()
-    results = []
-    
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-        )
-        page = await context.new_page()
-
-        # Run TUG Scraper
-        try:
-            tug_results = await scrape_tug_bargains(page, seen_ids)
-            results.extend(tug_results)
         except Exception as e:
-            print(f"Error executing TUG scraper: {e}")
+            logging.error(f"Error parsing HOA PDF {pdf_path_or_url}: {e}")
 
-        # Run RedWeek Scraper
-        try:
-            redweek_results = await scrape_redweek_bargains(page, seen_ids)
-            results.extend(redweek_results)
-        except Exception as e:
-            print(f"Error executing RedWeek scraper: {e}")
+        return extracted_listings
 
-        await browser.close()
+    def process_and_filter_listings(self, listings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Filters duplicates, scores remaining listings, and saves seen states."""
+        valuable_listings = []
 
-    save_seen_ids(seen_ids)
+        for listing in listings:
+            listing_id = str(listing.get("id"))
+            if listing_id in self.seen_ids:
+                continue
 
-    print("\n================ MATCHING RESULTS ================")
-    if results:
-        for item in results:
-            print(f"[{item['source']}] {item['title']}")
-            print(f" Price:      {item['price']}")
-            print(f" Maint Fee:  {item['maint_fee']}")
-            print(f" URL:        {item['url']}\n")
-        
-        send_email_alert(results)
-    else:
-        print("No new matching bargains found under the fee and price thresholds.")
+            # Evaluate properties
+            analyzed = self.evaluate_trading_power(listing)
+            self.seen_ids.add(listing_id)
+
+            # Filter threshold for alerts
+            if analyzed["trading_power_score"] >= 65:
+                valuable_listings.append(analyzed)
+
+        self.save_seen_ids()
+        return valuable_listings
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    monitor = TimeshareMonitor()
+
+    # Example Mock Data simulating extracted listings from web scrapers or HOA PDF lists
+    sample_raw_listings = [
+        {
+            "id": "ts_101",
+            "resort_name": "Barrier Island Station",
+            "location": "Duck, Outer Banks, NC",
+            "week_number": 28,
+            "bedrooms": 2,
+            "price": 500.00,
+            "maintenance_fee": 850.00,
+            "description": "HOA Direct Deed transfer. Fixed peak summer beach week."
+        },
+        {
+            "id": "ts_102",
+            "resort_name": "Orlando Sun Vacation Club",
+            "location": "Orlando, FL",
+            "week_number": 12,
+            "bedrooms": 2,
+            "price": 1.00,
+            "maintenance_fee": 1100.00,
+            "description": "Close to theme parks. Annual float week."
+        },
+        {
+            "id": "ts_103",
+            "resort_name": "Hyatt Piñon Pointe",
+            "location": "Sedona, AZ",
+            "week_number": 40,
+            "bedrooms": 2,
+            "price": 1200.00,
+            "maintenance_fee": 920.00,
+            "description": "Red Rock views. Includes lock-off option. Special assessment pending for roof repair."
+        }
+    ]
+
+    print("Running Timeshare Resale Monitor...\n")
+    results = monitor.process_and_filter_listings(sample_raw_listings)
+
+    for item in results:
+        print(f"[{item['trading_power_score']}/100] {item['resort_name']} - {item['location']}")
+        print(f" Price: ${item['price']} | Fee: ${item['maintenance_fee']} | Week: {item['week_number']}")
+        print(f" Flags: {', '.join(item['analysis_flags'])}")
+        print("-" * 60)
