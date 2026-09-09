@@ -1,0 +1,45 @@
+name: GDV Inventory Monitor
+
+on:
+  schedule:
+    # Runs twice daily at 12:15 PM UTC and 12:15 AM UTC (7:15 AM / 7:15 PM EST)
+    - cron: '15 0,12 * * *'
+  # Allows manual runs anytime from the GitHub Actions tab
+  workflow_dispatch:
+
+jobs:
+  run-monitor:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright
+          playwright install --with-deps chromium
+
+      - name: Execute GDV Monitor Script
+        env:
+          GDV_MEMBER_ID: ${{ secrets.GDV_MEMBER_ID }}
+          GDV_PASSWORD: ${{ secrets.GDV_PASSWORD }}
+          EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
+        run: |
+          python gdv_inventory_monitor.py
+
+      - name: Commit and push updated seen weeks file
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action Bot"
+          git add seen_gdv_weeks.json
+          git diff-index --quiet HEAD || git commit -m "Automated update: seen_gdv_weeks.json"
+          git push
