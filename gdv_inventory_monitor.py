@@ -143,22 +143,27 @@ def run_gdv_scrape():
         page.wait_for_load_state("networkidle")
         logging.info("Logged in successfully.")
 
-        # 2. Navigate to Condo Search via UI click
+        # 2. Navigate to Condominium Search
         logging.info("Navigating to Condominium Search...")
-        page.click("text=Destinations")
-        page.wait_for_load_state("networkidle")
+        
+        # Try clicking Destinations link or navigating directly if UI click fails to redirect
+        try:
+            page.click("a:has-text('Destinations'), #ctl00_lbDestinations, .nav a[href*='Search']", timeout=5000)
+            page.wait_for_load_state("networkidle")
+        except Exception as e:
+            logging.info(f"UI menu click skipped/failed ({e}), navigating directly to search page...")
+            page.goto("https://globaldiscoveryvacations.com/member/CondoSearch.aspx", timeout=30000)
+            page.wait_for_load_state("networkidle")
 
-        # 3. Target the Month Button directly
-        # ASP.NET ID found during inspection
-        month_selector = "#ctl00_cphMemberBody_rpMonthSelected_ctl01_lbFilter"
+        # 3. Target the Month Filter Button
+        # Try both direct ID and fuzzy attribute matches
+        month_selector = "#ctl00_cphMemberBody_rpMonthSelected_ctl01_lbFilter, a[id*='rpMonthSelected'][id*='lbFilter'], a:has-text('September, 2027')"
         
         logging.info("Waiting for target month button...")
-        # Use state="attached" in case the control is present in DOM before fully visible
-        page.wait_for_selector(month_selector, state="attached", timeout=20000)
-        
-        logging.info(f"Clicking month selector: {month_selector}")
+        page.wait_for_selector(month_selector, timeout=20000)
         page.click(month_selector, force=True)
         page.wait_for_load_state("networkidle")
+        logging.info("Successfully selected month filter!")
 
         # 4. Extract Nationwide Inventory (Destination left unselected)
         resort_cards = page.query_selector_all(".resort-card, .search-result-item, div#filter div.col-sm-12")
