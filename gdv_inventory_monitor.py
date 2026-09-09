@@ -130,7 +130,7 @@ def run_gdv_scrape():
         logging.info("Navigating to GDV Login Portal...")
         page.goto("https://globaldiscoveryvacations.com/agent/login.aspx", timeout=60000)
 
-        # 1. Authenticate using exact GDV login selectors
+       # 1. Authenticate using exact GDV login selectors
         username_selector = "#ctl00_body_tbLoginAgentID"
         password_selector = "input[type='password']"
         submit_selector = "input[type='submit'], button[type='submit']"
@@ -139,31 +139,29 @@ def run_gdv_scrape():
         page.wait_for_selector(username_selector, timeout=15000)
         page.fill(username_selector, GDV_MEMBER_ID)
         page.fill(password_selector, GDV_PASSWORD)
-        page.click(submit_selector)
-        page.wait_for_load_state("networkidle")
-        logging.info("Logged in successfully.")
-
-        # 2. Navigate to Condominium Search
-        logging.info("Navigating to Condominium Search...")
         
-        # Try clicking Destinations link or navigating directly if UI click fails to redirect
-        try:
-            page.click("a:has-text('Destinations'), #ctl00_lbDestinations, .nav a[href*='Search']", timeout=5000)
-            page.wait_for_load_state("networkidle")
-        except Exception as e:
-            logging.info(f"UI menu click skipped/failed ({e}), navigating directly to search page...")
-            page.goto("https://globaldiscoveryvacations.com/member/CondoSearch.aspx", timeout=30000)
-            page.wait_for_load_state("networkidle")
+        # Click login and explicitly wait for navigation off the login page
+        with page.expect_navigation(timeout=30000):
+            page.click(submit_selector)
+            
+        logging.info("Logged in successfully. Redirecting to Search grid...")
+
+        # 2. Go directly to search page and wait for full load
+        page.goto("https://globaldiscoveryvacations.com/CondoSearch.aspx", wait_until="networkidle", timeout=60000)
 
         # 3. Target the Month Filter Button
-        # Try both direct ID and fuzzy attribute matches
-        month_selector = "#ctl00_cphMemberBody_rpMonthSelected_ctl01_lbFilter, a[id*='rpMonthSelected'][id*='lbFilter'], a:has-text('September, 2027')"
+        month_selector = "a[id*='lbFilter']"
         
-        logging.info("Waiting for target month button...")
-        page.wait_for_selector(month_selector, timeout=20000)
-        page.click(month_selector, force=True)
-        page.wait_for_load_state("networkidle")
-        logging.info("Successfully selected month filter!")
+        try:
+            logging.info("Waiting for target month button...")
+            page.wait_for_selector(month_selector, timeout=20000)
+            page.click(month_selector, force=True)
+            page.wait_for_load_state("networkidle")
+            logging.info("Successfully selected month filter!")
+        except Exception as err:
+            logging.error(f"Failed to find month filter. Current URL: {page.url}")
+            page.screenshot(path="debug_search_page.png")
+            raise err
 
         # 4. Extract Nationwide Inventory (Destination left unselected)
         resort_cards = page.query_selector_all(".resort-card, .search-result-item, div#filter div.col-sm-12")
