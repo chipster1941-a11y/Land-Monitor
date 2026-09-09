@@ -139,12 +139,42 @@ def run_gdv_scrape():
         page.wait_for_selector(username_selector, timeout=15000)
         page.fill(username_selector, GDV_MEMBER_ID)
         page.fill(password_selector, GDV_PASSWORD)
+
+        logging.info("Submitting login form...")
+        # Submit form and wait for URL change away from login.aspx
+        page.click(submit_selector)
+        page.wait_for_load_state("networkidle")
+
+        # Check if login failed or stayed on login page
+        if "login.aspx" in page.url.lower():
+            logging.error("Still on login page. Checking for login error messages...")
+            error_el = page.query_selector(".alert, .error, #ctl00_body_lblError, .text-danger")
+            if error_el:
+                logging.error(f"Login failed message: {error_el.inner_text().strip()}")
+            page.screenshot(path="debug_login_failed.png")
+            raise Exception("Authentication failed or page remained on login.aspx. Check GDV_MEMBER_ID and GDV_PASSWORD secrets.")
+
+        logging.info(f"Login successful! Redirected to: {page.url}")
+
+        # 2. Navigate to search page
+        dest_link = page.query_selector("a:has-text('Destinations'), a[href*='Search'], #ctl00_lbDestinations")
+        if dest_link:
+            dest_link.click()
+            page.wait_for_load_state("networkidle")
+
+        # 3. Target the Month Filter Button
+        month_selector = "a[id*='lbFilter']"
         
-        # Click login and explicitly wait for navigation off the login page
-        with page.expect_navigation(timeout=30000):
-            page.click(submit_selector)
-            
-        logging.info("Logged in successfully. Redirecting to Search grid...")
+        try:
+            logging.info("Waiting for target month button...")
+            page.wait_for_selector(month_selector, timeout=20000)
+            page.click(month_selector, force=True)
+            page.wait_for_load_state("networkidle")
+            logging.info("Successfully selected month filter!")
+        except Exception as err:
+            logging.error(f"Failed to find month filter. Current URL: {page.url}")
+            page.screenshot(path="debug_search_page.png")
+            raise err
 
         # 2. After login, wait for the authenticated landing page to load
         logging.info("Waiting for member dashboard...")
