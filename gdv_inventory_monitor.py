@@ -131,16 +131,17 @@ def run_gdv_scrape():
         page.goto("https://globaldiscoveryvacations.com/agent/login.aspx", timeout=60000)
 
         # 1. Authenticate using exact GDV login selectors
-        page.fill("#ctl00_body_tbLoginAgentID", GDV_MEMBER_ID)
-        page.fill("input[type='password']", GDV_PASSWORD)
-        page.click("input[type='submit'], button[type='submit']")
-        page.wait_for_load_state("networkidle")
+        username_selector = "#ctl00_body_tbLoginAgentID"
+        password_selector = "input[type='password']"
+        submit_selector = "input[type='submit'], button[type='submit']"
 
+        logging.info("Waiting for login inputs...")
         page.wait_for_selector(username_selector, timeout=15000)
         page.fill(username_selector, GDV_MEMBER_ID)
         page.fill(password_selector, GDV_PASSWORD)
         page.click(submit_selector)
         page.wait_for_load_state("networkidle")
+        logging.info("Logged in successfully.")
 
         # 2. Navigate to Condo Search
         page.click("text=Destinations")
