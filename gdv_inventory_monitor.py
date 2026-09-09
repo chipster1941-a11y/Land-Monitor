@@ -146,10 +146,20 @@ def run_gdv_scrape():
             
         logging.info("Logged in successfully. Redirecting to Search grid...")
 
-        # 2. Go directly to search page and wait for full load
-        page.goto("https://globaldiscoveryvacations.com/CondoSearch.aspx", wait_until="networkidle", timeout=60000)
+        # 2. After login, wait for the authenticated landing page to load
+        logging.info("Waiting for member dashboard...")
+        page.wait_for_load_state("networkidle")
 
-        # 3. Target the Month Filter Button
+        # Navigate to search via UI link if needed
+        if "login" not in page.url.lower():
+            logging.info(f"Successfully logged in! Current page: {page.url}")
+            # Click Destinations or Search link on the dashboard
+            dest_link = page.query_selector("a:has-text('Destinations'), a[href*='Search'], a[href*='destinations']")
+            if dest_link:
+                dest_link.click()
+                page.wait_for_load_state("networkidle")
+
+        # 3. Target the Month Filter Button on the active search page
         month_selector = "a[id*='lbFilter']"
         
         try:
