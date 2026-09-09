@@ -143,18 +143,21 @@ def run_gdv_scrape():
         page.wait_for_load_state("networkidle")
         logging.info("Logged in successfully.")
 
-        # 2. Navigate to Condo Search
+        # 2. Navigate to Condo Search via UI click
         logging.info("Navigating to Condominium Search...")
-        page.goto("https://globaldiscoveryvacations.com/CondoSearch.aspx", timeout=60000)
+        page.click("text=Destinations")
         page.wait_for_load_state("networkidle")
 
-        # 3. Target the Month Filter Button Directly
-        # Uses the ASP.NET control ID found during inspection
-        month_selector = "a[id*='lbFilter']"
+        # 3. Target the Month Button directly
+        # ASP.NET ID found during inspection
+        month_selector = "#ctl00_cphMemberBody_rpMonthSelected_ctl01_lbFilter"
         
-        logging.info(f"Selecting target month using selector: {month_selector}")
-        page.wait_for_selector(month_selector, timeout=15000)
-        page.click(month_selector)
+        logging.info("Waiting for target month button...")
+        # Use state="attached" in case the control is present in DOM before fully visible
+        page.wait_for_selector(month_selector, state="attached", timeout=20000)
+        
+        logging.info(f"Clicking month selector: {month_selector}")
+        page.click(month_selector, force=True)
         page.wait_for_load_state("networkidle")
 
         # 4. Extract Nationwide Inventory (Destination left unselected)
