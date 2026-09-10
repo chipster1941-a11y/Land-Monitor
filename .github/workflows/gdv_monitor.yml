@@ -36,10 +36,14 @@ jobs:
         run: |
           python gdv_inventory_monitor.py
 
-      - name: Commit and push updated seen weeks file
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action Bot"
-          git add seen_gdv_weeks.json
-          git diff-index --quiet HEAD || git commit -m "Automated update: seen_gdv_weeks.json"
-          git push
+          - name: Commit and push state changes
+          run: |
+            git config --local user.email "action@github.com"
+            git config --local user.name "GitHub Action Bot"
+            if [ -f "seen_gdv_weeks.json" ]; then
+              git add seen_gdv_weeks.json
+              git diff-index --quiet HEAD || git commit -m "Automated update: seen_gdv_weeks.json"
+              git push
+            else
+              echo "No seen_gdv_weeks.json found to commit."
+            fi
