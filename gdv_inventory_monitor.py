@@ -149,28 +149,31 @@ def run_gdv_scrape():
 
         clicked = False
         for frame in all_frames:
-            # Query elements with text containing Search or Filter
+            if frame.is_detached():
+                continue
             candidates = frame.locator("*:has-text('Search'), *:has-text('Filter')")
-            count = candidates.count()
-            logging.info(f"Found {count} text match candidates in frame.")
+            try:
+                count = candidates.count()
+                logging.info(f"Found {count} text match candidates in frame.")
 
-            for i in range(count):
-                el = candidates.nth(i)
-                tag_name = el.evaluate("e => e.tagName.toLowerCase()")
-                # Only click interactive or leaf elements
-                if tag_name in ["button", "a", "input", "span", "div"] and el.is_visible():
-                    text_val = el.inner_text().strip()
-                    if text_val and len(text_val) < 25:
-                        logging.info(f"Attempting click on <{tag_name}> element: '{text_val}'")
-                        try:
-                            el.click(force=True)
-                            clicked = True
-                            page.wait_for_timeout(6000)
-                            break
-                        except Exception as e:
-                            logging.warning(f"Click failed on '{text_val}': {e}")
-            if clicked:
-                break
+                for i in range(count):
+                    el = candidates.nth(i)
+                    tag_name = el.evaluate("e => e.tagName.toLowerCase()")
+                    if tag_name in ["button", "a", "input", "span", "div"] and el.is_visible():
+                        text_val = el.inner_text().strip()
+                        if text_val and len(text_val) < 25:
+                            logging.info(f"Attempting click on <{tag_name}> element: '{text_val}'")
+                            try:
+                                el.click(force=True)
+                                clicked = True
+                                page.wait_for_timeout(6000)
+                                break
+                            except Exception as e:
+                                logging.warning(f"Click failed on '{text_val}': {e}")
+                if clicked:
+                    break
+            except Exception as e:
+                logging.warning(f"Error checking frame candidates: {e}")
 
         # 4. Fallback: Trigger ASP.NET PostBack directly if no click registered
         if not clicked:
@@ -185,7 +188,7 @@ def run_gdv_scrape():
             except Exception as e:
                 logging.warning(f"__doPostBack invocation failed: {e}")
 
-        # 5. Extract Grid / Table Items across all frames
+        # 5. Extract Grid / Table Items across attached frames safely
         card_selectors = [
             "table[id*='Grid'] tr",
             "table[id*='rg'] tr",
@@ -202,13 +205,21 @@ def run_gdv_scrape():
         ]
 
         listings = []
-        for frame in all_frames:
+        current_frames = [page] + [f for f in page.frames if not f.is_detached()]
+
+        for frame in current_frames:
+            if frame.is_detached():
+                continue
             for selector in card_selectors:
-                found = frame.query_selector_all(selector)
-                if len(found) > 0:
-                    logging.info(f"Matched {len(found)} elements in frame using selector '{selector}'")
-                    listings = found
-                    break
+                try:
+                    loc = frame.locator(selector)
+                    count = loc.count()
+                    if count > 0:
+                        logging.info(f"Matched {count} elements in frame using selector '{selector}'")
+                        listings = [loc.nth(i) for i in range(count)]
+                        break
+                except Exception as e:
+                    logging.warning(f"Skipping selector '{selector}' due to frame detachment/error: {e}")
             if len(listings) > 0:
                 break
 
@@ -216,11 +227,9 @@ def run_gdv_scrape():
             logging.info("No listings parsed. Saving debug artifacts (HTML snapshot + screenshot)...")
             page.screenshot(path="debug_condos_search_results.png")
             
-            # Save HTML snapshot
             with open("debug_condos_page.html", "w", encoding="utf-8") as f:
                 f.write(page.content())
                 
-            # Log all visible buttons/links on page for diagnostic inspection
             buttons_dump = page.evaluate("""
                 () => Array.from(document.querySelectorAll('a, button, input[type="button"], input[type="submit"], div[class*="btn"]'))
                     .map(e => ({ tag: e.tagName, id: e.id, class: e.className, text: e.innerText || e.value }))
