@@ -109,7 +109,6 @@ def run_gdv_scrape():
 
         page.wait_for_timeout(3000)
 
-        target_frame = page
         user_input = None
         pass_input = None
 
@@ -119,7 +118,6 @@ def run_gdv_scrape():
             pwd_loc = frame.locator("input[type='password']")
 
             if txt_loc.count() > 0 and pwd_loc.count() > 0:
-                target_frame = frame
                 user_input = txt_loc.first
                 pass_input = pwd_loc.first
                 break
@@ -139,27 +137,16 @@ def run_gdv_scrape():
         logging.info(f"Member login successful! Current URL: {page.url}")
         dismiss_modals(page)
 
-        # 2. Click 'CONDOS' navigation link directly
-        logging.info("Clicking CONDOS link from main navigation...")
-        try:
-            condos_link = page.locator("a:has-text('CONDOS')").first
-            condos_link.click(force=True)
-            page.wait_for_timeout(5000)
-        except Exception as e:
-            logging.warning(f"Click on CONDOS link failed: {e}. Falling back to direct URL navigation.")
-            page.goto("https://globaldiscoveryvacations.com/condos/Condos.aspx", wait_until="networkidle", timeout=30000)
-
-        page.wait_for_timeout(5000)
+        # 2. Navigate directly to the main Condos search page
+        logging.info("Navigating directly to https://globaldiscoveryvacations.com/condos/Condos.aspx...")
+        page.goto("https://globaldiscoveryvacations.com/condos/Condos.aspx", wait_until="networkidle", timeout=30000)
+        page.wait_for_timeout(7000)
         dismiss_modals(page)
 
-        # Check for child iframes hosting search widgets
-        iframes = page.query_selector_all("iframe")
-        logging.info(f"Detected {len(iframes)} iframe(s) on current page.")
-        for idx, frame_el in enumerate(iframes):
-            src = frame_el.get_attribute("src") or "No src"
-            logging.info(f"Iframe #{idx} src: {src}")
+        # 3. Scan all frames (including non-src inline frames)
+        all_contexts = [page] + page.frames
+        logging.info(f"Scanning {len(all_contexts)} total context(s) (page + frames)...")
 
-        # 3. Search and extract across all active frames
         card_selectors = [
             "table[id*='Grid'] tr",
             "table[id*='rg'] tr",
@@ -169,28 +156,46 @@ def run_gdv_scrape():
             ".search-result-item",
             ".resort-card",
             ".inventory-item",
-            "table tr",
+            "table.table tr",
+            ".card",
             "div[class*='resort']",
-            "div[class*='inventory']",
-            "div[class*='card']"
+            "div[class*='inventory']"
         ]
 
         listings = []
-        current_contexts = [page] + [f for f in page.frames if not f.is_detached()]
 
-        for ctx in current_contexts:
+        for idx, ctx in enumerate(all_contexts):
             if is_context_detached(ctx):
                 continue
+            logging.info(f"Checking context #{idx} (URL: {getattr(ctx, 'url', 'N/A')})...")
+
+            # Try interacting with any search button in frame/page
+            search_btns = ctx.locator("input[type='submit'], button, a:has-text('Search'), div:has-text('Search')")
+            try:
+                cnt = search_btns.count()
+                if cnt > 0:
+                    logging.info(f"Found {cnt} potential search control(s) in context #{idx}.")
+                    for b_idx in range(min(cnt, 3)):
+                        btn = search_btns.nth(b_idx)
+                        if btn.is_visible():
+                            logging.info(f"Clicking search control in context #{idx}...")
+                            btn.click(force=True)
+                            page.wait_for_timeout(5000)
+                            break
+            except Exception as e:
+                logging.warning(f"Error checking buttons in context #{idx}: {e}")
+
+            # Extract inventory items from current context
             for selector in card_selectors:
                 try:
                     loc = ctx.locator(selector)
                     count = loc.count()
                     if count > 0:
-                        logging.info(f"Matched {count} elements in context using selector '{selector}'")
+                        logging.info(f"Matched {count} elements in context #{idx} using selector '{selector}'")
                         listings = [loc.nth(i) for i in range(count)]
                         break
                 except Exception as e:
-                    logging.warning(f"Skipping selector '{selector}': {e}")
+                    logging.warning(f"Selector error in context #{idx}: {e}")
             if len(listings) > 0:
                 break
 
@@ -201,12 +206,13 @@ def run_gdv_scrape():
             with open("debug_condos_page.html", "w", encoding="utf-8") as f:
                 f.write(page.content())
 
-            all_links = page.evaluate("""
-                () => Array.from(document.querySelectorAll('a'))
-                    .map(a => ({ text: a.innerText ? a.innerText.trim() : '', href: a.href }))
-                    .filter(a => a.text.length > 0)
-            """)
-            logging.info(f"Available navigation links: {json.dumps(all_links[:20], indent=2)}")
+            # Log frame HTML lengths to confirm where content lives
+            for idx, f in enumerate(page.frames):
+                try:
+                    html_len = len(f.content())
+                    logging.info(f"Frame #{idx} HTML length: {html_len} chars | URL: {f.url}")
+                except Exception:
+                    pass
 
         for listing in listings:
             try:
