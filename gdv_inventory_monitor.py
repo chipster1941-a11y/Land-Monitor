@@ -82,7 +82,6 @@ def dismiss_modals(page):
 
 
 def is_context_detached(ctx):
-    """Safely checks if a Frame is detached while returning False for Page."""
     if hasattr(ctx, "is_detached"):
         return ctx.is_detached()
     return False
@@ -138,64 +137,29 @@ def run_gdv_scrape():
             page.wait_for_timeout(5000)
 
         logging.info(f"Member login successful! Current URL: {page.url}")
-
         dismiss_modals(page)
 
-        # 2. Direct route to Condos search endpoint
-        logging.info("Navigating directly to Condos search endpoint...")
-        page.goto("https://globaldiscoveryvacations.com/condos/Condos.aspx", wait_until="networkidle", timeout=30000)
-        
-        logging.info("Waiting 7 seconds for AJAX search form controls to render...")
-        page.wait_for_timeout(7000)
+        # 2. Click 'CONDOS' navigation link directly
+        logging.info("Clicking CONDOS link from main navigation...")
+        try:
+            condos_link = page.locator("a:has-text('CONDOS')").first
+            condos_link.click(force=True)
+            page.wait_for_timeout(5000)
+        except Exception as e:
+            logging.warning(f"Click on CONDOS link failed: {e}. Falling back to direct URL navigation.")
+            page.goto("https://globaldiscoveryvacations.com/condos/Condos.aspx", wait_until="networkidle", timeout=30000)
 
+        page.wait_for_timeout(5000)
         dismiss_modals(page)
 
-        # 3. Broad click search on text matches
-        all_contexts = [page] + page.frames
-        logging.info("Attempting click on any clickable element containing 'Search'...")
+        # Check for child iframes hosting search widgets
+        iframes = page.query_selector_all("iframe")
+        logging.info(f"Detected {len(iframes)} iframe(s) on current page.")
+        for idx, frame_el in enumerate(iframes):
+            src = frame_el.get_attribute("src") or "No src"
+            logging.info(f"Iframe #{idx} src: {src}")
 
-        clicked = False
-        for ctx in all_contexts:
-            if is_context_detached(ctx):
-                continue
-            candidates = ctx.locator("*:has-text('Search'), *:has-text('Filter')")
-            try:
-                count = candidates.count()
-                logging.info(f"Found {count} text match candidates in frame/page.")
-
-                for i in range(count):
-                    el = candidates.nth(i)
-                    tag_name = el.evaluate("e => e.tagName.toLowerCase()")
-                    if tag_name in ["button", "a", "input", "span", "div"] and el.is_visible():
-                        text_val = el.inner_text().strip()
-                        if text_val and len(text_val) < 25:
-                            logging.info(f"Attempting click on <{tag_name}> element: '{text_val}'")
-                            try:
-                                el.click(force=True)
-                                clicked = True
-                                page.wait_for_timeout(6000)
-                                break
-                            except Exception as e:
-                                logging.warning(f"Click failed on '{text_val}': {e}")
-                if clicked:
-                    break
-            except Exception as e:
-                logging.warning(f"Error checking frame candidates: {e}")
-
-        # 4. Fallback: Trigger ASP.NET PostBack directly if no click registered
-        if not clicked:
-            logging.info("Attempting direct ASP.NET __doPostBack submission...")
-            try:
-                page.evaluate("""
-                    if (typeof __doPostBack === 'function') {
-                        __doPostBack('', '');
-                    }
-                """)
-                page.wait_for_timeout(5000)
-            except Exception as e:
-                logging.warning(f"__doPostBack invocation failed: {e}")
-
-        # 5. Extract Grid / Table Items across attached frames safely
+        # 3. Search and extract across all active frames
         card_selectors = [
             "table[id*='Grid'] tr",
             "table[id*='rg'] tr",
@@ -226,23 +190,23 @@ def run_gdv_scrape():
                         listings = [loc.nth(i) for i in range(count)]
                         break
                 except Exception as e:
-                    logging.warning(f"Skipping selector '{selector}' due to detachment/error: {e}")
+                    logging.warning(f"Skipping selector '{selector}': {e}")
             if len(listings) > 0:
                 break
 
         if len(listings) == 0:
             logging.info("No listings parsed. Saving debug artifacts (HTML snapshot + screenshot)...")
             page.screenshot(path="debug_condos_search_results.png")
-            
+
             with open("debug_condos_page.html", "w", encoding="utf-8") as f:
                 f.write(page.content())
-                
-            buttons_dump = page.evaluate("""
-                () => Array.from(document.querySelectorAll('a, button, input[type="button"], input[type="submit"], div[class*="btn"]'))
-                    .map(e => ({ tag: e.tagName, id: e.id, class: e.className, text: e.innerText || e.value }))
-                    .filter(e => e.text && e.text.trim().length > 0)
+
+            all_links = page.evaluate("""
+                () => Array.from(document.querySelectorAll('a'))
+                    .map(a => ({ text: a.innerText ? a.innerText.trim() : '', href: a.href }))
+                    .filter(a => a.text.length > 0)
             """)
-            logging.info(f"Visible actionable elements on page: {json.dumps(buttons_dump[:15], indent=2)}")
+            logging.info(f"Available navigation links: {json.dumps(all_links[:20], indent=2)}")
 
         for listing in listings:
             try:
