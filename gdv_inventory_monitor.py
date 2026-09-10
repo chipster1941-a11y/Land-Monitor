@@ -131,109 +131,73 @@ def run_gdv_scrape():
         logging.info(f"Member login successful! Current URL: {page.url}")
         dismiss_modals(page)
 
-        # 2. Navigate directly to Condos search
+        # 2. Navigate directly to Condos search endpoint
         logging.info("Navigating to Condos search endpoint...")
         page.goto("https://globaldiscoveryvacations.com/condos/Condos.aspx", wait_until="networkidle", timeout=30000)
         page.wait_for_timeout(6000)
         dismiss_modals(page)
 
-        # 3. Trigger UI filters and search controls
-        logging.info("Interacting with custom UI filter controls...")
+        # 3. Locate elements based on 'View Resort' action buttons
+        logging.info("Searching for resort containers via 'View Resort' action links...")
         
-        # Click "Destination" or "Month" filter button if present
-        for filter_name in ["Destination", "Month", "Vacation Type"]:
-            try:
-                btn = page.locator(f"button:has-text('{filter_name}'), a:has-text('{filter_name}'), div:has-text('{filter_name}')").first
-                if btn.is_visible():
-                    logging.info(f"Clicking filter component: '{filter_name}'")
-                    btn.click(force=True)
-                    page.wait_for_timeout(1500)
-            except Exception as e:
-                logging.warning(f"Filter '{filter_name}' click skipped: {e}")
+        # Primary strategy: find all 'View Resort' links and pull their parent container text
+        view_resort_links = page.locator("a:has-text('View Resort')")
+        link_count = view_resort_links.count()
+        logging.info(f"Found {link_count} 'View Resort' listing triggers on page.")
 
-        # Execute primary search trigger (button with text or search icon)
-        search_triggers = [
-            "button:has-text('Search')",
-            "a:has-text('Search')",
-            "input[value*='Search']",
-            ".btn-search",
-            "#btnSearch",
-            "button[type='submit']"
-        ]
+        parsed_items = []
 
-        clicked_search = False
-        for trigger in search_triggers:
-            try:
-                elem = page.locator(trigger).first
-                if elem.is_visible():
-                    logging.info(f"Clicking primary search trigger matching locator: '{trigger}'")
-                    elem.click(force=True)
-                    clicked_search = True
-                    page.wait_for_timeout(7000)
-                    break
-            except Exception:
-                pass
+        if link_count > 0:
+            for i in range(link_count):
+                try:
+                    # Get enclosing card/row container element
+                    container = view_resort_links.nth(i).locator("xpath=ancestor::div[contains(@class, 'col-') or contains(@class, 'card') or contains(@class, 'item') or contains(@class, 'resort')][1]")
+                    
+                    if container.count() == 0:
+                        # Fallback to direct parent paragraph or div
+                        container = view_resort_links.nth(i).locator("xpath=..")
 
-        if not clicked_search:
-            logging.info("No standard 'Search' button matched visually. Dumping all button class names & attributes...")
-            button_details = page.evaluate("""
-                () => Array.from(document.querySelectorAll('button, a.btn, input[type="button"], input[type="submit"]')).map(b => ({
-                    tag: b.tagName,
-                    id: b.id,
-                    className: b.className,
-                    text: b.innerText ? b.innerText.trim() : '',
-                    onclick: b.getAttribute('onclick') || ''
-                }))
-            """)
-            logging.info(f"Interactive UI controls map: {json.dumps(button_details, indent=2)}")
+                    card_text = container.inner_text().strip()
+                    # Clean up whitespace
+                    clean_text = " ".join(card_text.split())
+                    if len(clean_text) > 10:
+                        parsed_items.append(clean_text)
+                except Exception as e:
+                    logging.warning(f"Error extracting resort card index {i}: {e}")
 
-        # 4. Extract Inventory Items
-        card_selectors = [
-            "table[id*='Grid'] tr",
-            "table[id*='rg'] tr",
-            "tr.rgRow",
-            "tr.rgAltRow",
-            ".condo-item",
-            ".search-result-item",
-            ".resort-card",
-            ".inventory-item",
-            "table.table tr",
-            ".card",
-            "div[class*='resort']",
-            "div[class*='result']"
-        ]
-
-        listings = []
-        for selector in card_selectors:
-            try:
+        # Fallback strategy: selector scan if anchor parent extraction yields nothing
+        if not parsed_items:
+            fallback_selectors = [
+                ".thumbnail",
+                ".caption",
+                "div[class*='resort']",
+                "div[class*='condo']",
+                ".panel-body"
+            ]
+            for selector in fallback_selectors:
                 loc = page.locator(selector)
-                count = loc.count()
-                if count > 0:
-                    logging.info(f"Matched {count} inventory elements using selector '{selector}'")
-                    listings = [loc.nth(i) for i in range(count)]
-                    break
-            except Exception as e:
-                logging.warning(f"Selector error: {e}")
+                if loc.count() > 0:
+                    logging.info(f"Fallback selector '{selector}' matched {loc.count()} items.")
+                    for j in range(loc.count()):
+                        txt = " ".join(loc.nth(j).inner_text().split())
+                        if "View Resort" in txt and len(txt) > 15:
+                            parsed_items.append(txt)
+                    if parsed_items:
+                        break
 
-        if len(listings) == 0:
-            logging.info("No listings parsed. Saving debug artifacts...")
-            page.screenshot(path="debug_condos_search_results.png")
-            with open("debug_condos_page.html", "w", encoding="utf-8") as f:
-                f.write(page.content())
+        logging.info(f"Successfully extracted {len(parsed_items)} resort listing cards.")
 
-        for listing in listings:
-            try:
-                title = listing.inner_text().strip()
-                week_id = " ".join(title.split())[:80]
+        # 4. Evaluate new listings
+        for item_text in parsed_items:
+            # First 100 characters serve as a distinct fingerprint
+            item_id = item_text[:100]
 
-                if week_id and len(week_id) > 10 and week_id not in seen_weeks:
-                    seen_weeks.add(week_id)
-                    new_weeks.append({
-                        "title": week_id,
-                        "dates": TARGET_MONTH_LABEL
-                    })
-            except Exception as e:
-                logging.warning(f"Error parsing item: {e}")
+            if item_id not in seen_weeks:
+                seen_weeks.add(item_id)
+                new_weeks.append({
+                    "title": item_text,
+                    "dates": TARGET_MONTH_LABEL
+                })
 
         browser.close()
 
