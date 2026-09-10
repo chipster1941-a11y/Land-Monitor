@@ -143,54 +143,48 @@ def run_gdv_scrape():
 
         dismiss_modals(page)
 
-        # 3. Traversal across all frames (main page + iframes) to locate interactive search controls
-        logging.info("Scanning all frames for search form controls...")
+        # 3. Log all visible input buttons / submit triggers across main page
         all_frames = [page] + page.frames
-        
-        search_frame = page
+        logging.info("Searching for interactive search buttons across all frames...")
 
-        for idx, frame in enumerate(all_frames):
-            selects = frame.locator("select")
-            inputs = frame.locator("input, button, a")
-            
-            sel_count = selects.count()
-            input_count = inputs.count()
-            
-            frame_name = getattr(frame, "name", "main_page") or f"frame_{idx}"
-            logging.info(f"Frame #{idx} ('{frame_name}') contains {sel_count} <select> and {input_count} interactive inputs.")
-            
-            if sel_count > 0:
-                search_frame = frame
-                for s_i in range(sel_count):
-                    s_elem = selects.nth(s_i)
-                    s_id = s_elem.get_attribute("id") or f"sel_{s_i}"
-                    opts = s_elem.locator("option")
-                    opt_list = [opts.nth(o_i).inner_text().strip() for o_i in range(min(opts.count(), 8))]
-                    logging.info(f"  Dropdown [{s_id}] options: {opt_list}")
-
-        # 4. Trigger Search / Postback Button across all detected buttons
         search_triggers = [
+            "input[type='submit']",
             "input[value*='Search']",
             "input[value*='Filter']",
             "button:has-text('Search')",
             "a:has-text('Search')",
-            "input[id*='btnSearch']",
-            "a[id*='lbSearch']",
-            "input[type='submit']"
+            "input[id*='btn']",
+            "a[id*='btn']",
+            "button[id*='btn']",
+            "input[id*='Search']",
+            "a[id*='Search']"
         ]
 
-        for trigger in search_triggers:
-            btn = search_frame.locator(trigger).first
-            if btn.is_visible():
-                logging.info(f"Triggering search button '{trigger}' inside target frame...")
-                try:
-                    btn.click(force=True)
-                    page.wait_for_timeout(6000)
-                except Exception as e:
-                    logging.warning(f"Error clicking search trigger: {e}")
+        clicked_button = False
+        for frame in all_frames:
+            for trigger in search_triggers:
+                matching_btns = frame.locator(trigger)
+                count = matching_btns.count()
+                if count > 0:
+                    for b_i in range(count):
+                        btn = matching_btns.nth(b_i)
+                        if btn.is_visible():
+                            btn_text = btn.inner_text().strip() or btn.get_attribute("value") or btn.get_attribute("id") or "unnamed_btn"
+                            logging.info(f"Found visible search candidate: '{btn_text}' using selector '{trigger}'")
+                            try:
+                                btn.click(force=True)
+                                logging.info(f"Successfully clicked button '{btn_text}'!")
+                                clicked_button = True
+                                page.wait_for_timeout(6000)
+                                break
+                            except Exception as e:
+                                logging.warning(f"Failed to click '{btn_text}': {e}")
+                if clicked_button:
+                    break
+            if clicked_button:
                 break
 
-        # 5. Extract Grid / Table Items across all frames
+        # 4. Extract Grid / Table Items across all frames
         card_selectors = [
             "table[id*='Grid'] tr",
             "table[id*='rg'] tr",
@@ -200,7 +194,7 @@ def run_gdv_scrape():
             ".search-result-item",
             ".resort-card",
             ".inventory-item",
-            "table tr",
+            "table.rgMasterTable tr",
             "div[class*='resort']",
             "div[class*='inventory']",
             "div[class*='card']"
