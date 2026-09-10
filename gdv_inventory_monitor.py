@@ -77,7 +77,7 @@ def run_gdv_scrape():
         page = context.new_page()
 
         logging.info("Navigating to GDV Login Portal...")
-        page.goto("https://globaldiscoveryvacations.com/agent/login.aspx", timeout=60000)
+        page.goto("https://globaldiscoveryvacations.com/agent/login.aspx", wait_until="domcontentloaded", timeout=60000)
 
         # 1. Authenticate using exact GDV login selectors
         username_selector = "#ctl00_body_tbLoginAgentID"
