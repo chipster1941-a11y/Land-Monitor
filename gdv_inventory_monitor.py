@@ -140,50 +140,52 @@ def run_gdv_scrape():
 
         logging.info(f"Member login successful! Current URL: {page.url}")
 
-        # 2. Navigate into Search/Inventory Section from members.aspx
-        logging.info("Searching for inventory navigation links...")
-        search_nav_selectors = [
-            "a:has-text('Search')",
-            "a:has-text('Destinations')",
-            "a:has-text('Resorts')",
-            "a:has-text('Condo')",
-            "a:has-text('Book')",
-            "a[href*='search']",
-            "a[href*='destination']",
-            "a[href*='inventory']",
-            "a[href*='resort']"
-        ]
+        # 2. Target the CONDOS dropdown/section
+        logging.info("Navigating into CONDOS section...")
+        condos_link = page.locator("a:has-text('CONDOS'), a[href*='condo'], a[href*='Condo']").first
 
-        nav_clicked = False
-        for sel in search_nav_selectors:
-            elements = page.locator(sel)
-            if elements.count() > 0 and elements.first.is_visible():
-                logging.info(f"Clicking navigation element: {sel}")
-                try:
-                    with page.expect_navigation(timeout=15000):
-                        elements.first.click()
-                except Exception:
-                    elements.first.click()
-                    page.wait_for_timeout(4000)
-                nav_clicked = True
-                break
+        if condos_link.is_visible():
+            condos_link.hover()
+            page.wait_for_timeout(1000)
 
-        if not nav_clicked:
-            logging.info("Direct navigation links not found; attempting direct search URL load...")
-            page.goto("https://globaldiscoveryvacations.com/search.aspx", wait_until="domcontentloaded", timeout=30000)
+            # Check if hover revealed a sub-menu link like "Search Condos" or "Availability"
+            sub_link = page.locator("a:has-text('Search'), a:has-text('Availability'), a:has-text('Browse'), a[href*='search']").first
+            if sub_link.is_visible():
+                logging.info("Clicking sub-menu link revealed under CONDOS...")
+                sub_link.click()
+            else:
+                logging.info("Clicking main CONDOS header link...")
+                condos_link.click()
+            page.wait_for_timeout(4000)
+
+        # Direct navigation fallback if still on base members page
+        if "members.aspx" in page.url.lower():
+            logging.info("Attempting direct route fallback to /condos.aspx...")
+            page.goto("https://globaldiscoveryvacations.com/condos.aspx", wait_until="domcontentloaded", timeout=20000)
             page.wait_for_timeout(3000)
 
-        logging.info(f"Navigated to Search URL: {page.url}")
+        logging.info(f"Current inventory URL: {page.url}")
 
-        # 3. Handle Filter/Search Trigger if present
-        filter_buttons = page.locator("input[value*='Search'], button:has-text('Search'), a:has-text('Search'), input[id*='btnSearch']")
-        if filter_buttons.count() > 0 and filter_buttons.first.is_visible():
-            logging.info("Triggering search/filter submission...")
-            try:
-                filter_buttons.first.click()
-                page.wait_for_timeout(5000)
-            except Exception as e:
-                logging.warning(f"Filter click issue: {e}")
+        # 3. Trigger Search Form / Grid Load if present
+        search_triggers = [
+            "input[value*='Search']",
+            "button:has-text('Search')",
+            "a:has-text('Search')",
+            "input[id*='btnSearch']",
+            "input[id*='btnSubmit']",
+            "a[id*='lbSearch']"
+        ]
+
+        for trigger_sel in search_triggers:
+            btn = page.locator(trigger_sel).first
+            if btn.is_visible():
+                logging.info(f"Triggering search button via '{trigger_sel}'...")
+                try:
+                    btn.click()
+                    page.wait_for_timeout(4000)
+                except Exception as e:
+                    logging.warning(f"Error triggering search button: {e}")
+                break
 
         # 4. Scrape Cards / Inventory Rows
         card_selectors = [
@@ -197,6 +199,7 @@ def run_gdv_scrape():
             "tr.rgAltRow",
             "div[class*='resort']",
             "div[class*='inventory']",
+            "div[class*='condo']",
             "div[class*='card']"
         ]
 
@@ -209,9 +212,9 @@ def run_gdv_scrape():
                 break
 
         if len(listings) == 0:
-            page.screenshot(path="debug_member_search.png")
+            page.screenshot(path="debug_condos_search.png")
             page_text = page.locator("body").inner_text()
-            logging.info(f"Search page snippet: {page_text[:300].replace(chr(10), ' ').strip()}")
+            logging.info(f"Page text snippet: {page_text[:400].replace(chr(10), ' ').strip()}")
 
         for listing in listings:
             try:
