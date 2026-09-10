@@ -68,34 +68,24 @@ def send_email_notification(new_weeks):
 
 def dismiss_modals(page):
     """Detects and closes popup modals interrupting navigation."""
-    logging.info("Checking for popup modals or contact verification overlays...")
     modal_close_selectors = [
         "button.close",
         ".modal .close",
         "button:has-text('Close')",
         "button:has-text('Skip')",
-        "button:has-text('Later')",
-        "button:has-text('Remind')",
         "a:has-text('Close')",
-        "a:has-text('Skip')",
-        "a:has-text('Continue')",
-        "input[value*='Close']",
-        "input[value*='Skip']",
-        "input[value*='Continue']",
-        "div.modal-header .close"
+        "a:has-text('Skip')"
     ]
 
     for sel in modal_close_selectors:
         close_btn = page.locator(sel).first
         if close_btn.is_visible():
-            logging.info(f"Modal overlay detected! Clicking dismiss element: '{sel}'")
             try:
                 close_btn.click(force=True)
-                page.wait_for_timeout(2000)
-            except Exception as e:
-                logging.warning(f"Failed to click dismiss button '{sel}': {e}")
+                page.wait_for_timeout(1000)
+            except Exception:
+                pass
 
-    # Fallback: Hide remaining backdrops or modals via DOM manipulation if still present
     try:
         page.evaluate("""
             () => {
@@ -105,9 +95,8 @@ def dismiss_modals(page):
                 document.body.style.overflow = 'auto';
             }
         """)
-        logging.info("Cleaned up lingering modal backdrops via DOM cleanup.")
-    except Exception as e:
-        logging.warning(f"DOM backdrop cleanup skipped: {e}")
+    except Exception:
+        pass
 
 
 def run_gdv_scrape():
@@ -132,8 +121,6 @@ def run_gdv_scrape():
 
         page.wait_for_timeout(3000)
 
-        logging.info("Locating input fields dynamically...")
-
         target_frame = page
         user_input = None
         pass_input = None
@@ -150,67 +137,57 @@ def run_gdv_scrape():
                 break
 
         if not user_input or not pass_input:
-            page.screenshot(path="debug_login_missing_inputs.png")
-            page_text = page.locator("body").inner_text()
-            logging.error(f"Page text excerpt: {page_text[:400].replace(chr(10), ' ').strip()}")
-            raise Exception("Could not locate username/password fields on page or subframes.")
+            raise Exception("Could not locate username/password fields.")
 
-        logging.info("Filling credentials into detected fields...")
         user_input.fill(clean_member_id)
         pass_input.fill(clean_password)
 
-        logging.info("Submitting login form via Enter press...")
         try:
             with page.expect_navigation(timeout=20000):
                 pass_input.press("Enter")
         except Exception:
             page.wait_for_timeout(4000)
 
-        if "login.aspx" in page.url.lower():
-            logging.info("Executing click fallback on submit elements...")
-            login_btn = target_frame.locator("input[type='submit'], button[type='submit'], input[value*='Login'], a:has-text('Login')").first
-            if login_btn.is_visible():
-                try:
-                    with page.expect_navigation(timeout=15000):
-                        login_btn.click()
-                except Exception:
-                    page.wait_for_timeout(4000)
-
-        if "login.aspx" in page.url.lower():
-            page.screenshot(path="debug_login_failed.png")
-            page_text = page.locator("body").inner_text()
-            logging.error(f"Page text excerpt: {page_text[:400].replace(chr(10), ' ').strip()}")
-            raise Exception("Authentication failed on member login.aspx.")
-
         logging.info(f"Member login successful! Current URL: {page.url}")
 
-        # 2. Dismiss any post-login modal popups (e.g. "Please verify your contact information")
         dismiss_modals(page)
 
-        # 3. Direct route to Condos search endpoint extracted from log (condos/Condos.aspx)
+        # 2. Direct route to Condos search endpoint
         logging.info("Navigating directly to Condos search endpoint...")
-        try:
-            page.goto("https://globaldiscoveryvacations.com/condos/Condos.aspx", wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_timeout(3000)
-        except Exception as e:
-            logging.warning(f"Direct navigation encountered issue: {e}")
+        page.goto("https://globaldiscoveryvacations.com/condos/Condos.aspx", wait_until="domcontentloaded", timeout=30000)
+        page.wait_for_timeout(3000)
 
-        # If direct navigation didn't land, fallback to clicking menu link with force=True
-        if "condos" not in page.url.lower():
-            logging.info("Attempting forced click on CONDOS navigation link...")
-            condos_link = page.locator("a:has-text('CONDOS'), a[href*='Condos.aspx']").first
-            if condos_link.is_visible():
-                condos_link.click(force=True)
-                page.wait_for_timeout(4000)
-
-        logging.info(f"Current inventory URL: {page.url}")
-
-        # Clear any modal on search page if present
         dismiss_modals(page)
 
-        # 4. Trigger Search Form / Grid Load if present
+        # 3. Inspect and adjust search form inputs
+        logging.info("Inspecting available form dropdowns on Condos.aspx...")
+        selects = page.locator("select")
+        select_count = selects.count()
+        logging.info(f"Found {select_count} select dropdowns on search page.")
+
+        for i in range(select_count):
+            sel_elem = selects.nth(i)
+            sel_id = sel_elem.get_attribute("id") or f"index_{i}"
+            sel_name = sel_elem.get_attribute("name") or ""
+            
+            # Print available options for debugging
+            options = sel_elem.locator("option")
+            opt_texts = [options.nth(j).inner_text().strip() for j in range(min(options.count(), 10))]
+            logging.info(f"Dropdown [{sel_id} / {sel_name}] options preview: {opt_texts}")
+
+            # Try selecting Month or Date matching filters if present
+            if "month" in sel_id.lower() or "month" in sel_name.lower():
+                for j in range(options.count()):
+                    opt_text = options.nth(j).inner_text().strip()
+                    if "2027" in opt_text or "Oct" in opt_text or "Sep" in opt_text or "Nov" in opt_text:
+                        logging.info(f"Selecting option '{opt_text}' in dropdown {sel_id}")
+                        sel_elem.select_option(index=j)
+                        break
+
+        # 4. Trigger Search / Postback Button
         search_triggers = [
             "input[value*='Search']",
+            "input[value*='Filter']",
             "button:has-text('Search')",
             "a:has-text('Search')",
             "input[id*='btnSearch']",
@@ -218,30 +195,35 @@ def run_gdv_scrape():
             "a[id*='lbSearch']"
         ]
 
+        search_clicked = False
         for trigger_sel in search_triggers:
             btn = page.locator(trigger_sel).first
             if btn.is_visible():
-                logging.info(f"Triggering search button via '{trigger_sel}'...")
+                logging.info(f"Clicking search trigger: '{trigger_sel}'...")
                 try:
+                    with page.expect_navigation(timeout=15000):
+                        btn.click(force=True)
+                except Exception:
                     btn.click(force=True)
-                    page.wait_for_timeout(4000)
-                except Exception as e:
-                    logging.warning(f"Error triggering search button: {e}")
+                    page.wait_for_timeout(5000)
+                search_clicked = True
                 break
 
-        # 5. Scrape Cards / Inventory Rows
+        if not search_clicked:
+            logging.info("No explicit search button found; checking default table contents...")
+
+        # 5. Extract Inventory Results
         card_selectors = [
+            "table[id*='Grid'] tr",
+            "table[id*='rg'] tr",
             ".condo-item",
             ".search-result-item",
             ".resort-card",
             ".inventory-item",
-            ".grid-item",
-            ".resort",
             "tr.rgRow",
             "tr.rgAltRow",
             "div[class*='resort']",
             "div[class*='inventory']",
-            "div[class*='condo']",
             "div[class*='card']"
         ]
 
@@ -254,16 +236,16 @@ def run_gdv_scrape():
                 break
 
         if len(listings) == 0:
-            page.screenshot(path="debug_condos_search.png")
+            page.screenshot(path="debug_condos_search_results.png")
             page_text = page.locator("body").inner_text()
-            logging.info(f"Page text snippet: {page_text[:400].replace(chr(10), ' ').strip()}")
+            logging.info(f"Result page snippet: {page_text[:500].replace(chr(10), ' ').strip()}")
 
         for listing in listings:
             try:
                 title = listing.inner_text().strip()
                 week_id = " ".join(title.split())[:80]
 
-                if week_id and week_id not in seen_weeks:
+                if week_id and len(week_id) > 10 and week_id not in seen_weeks:
                     seen_weeks.add(week_id)
                     new_weeks.append({
                         "title": week_id,
