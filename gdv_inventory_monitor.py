@@ -81,12 +81,6 @@ def dismiss_modals(page):
         pass
 
 
-def is_context_detached(ctx):
-    if hasattr(ctx, "is_detached"):
-        return ctx.is_detached()
-    return False
-
-
 def run_gdv_scrape():
     if not GDV_MEMBER_ID or not GDV_PASSWORD:
         logging.error("GDV credentials missing from environment variables.")
@@ -137,16 +131,55 @@ def run_gdv_scrape():
         logging.info(f"Member login successful! Current URL: {page.url}")
         dismiss_modals(page)
 
-        # 2. Navigate directly to the main Condos search page
-        logging.info("Navigating directly to https://globaldiscoveryvacations.com/condos/Condos.aspx...")
+        # 2. Navigate directly to Condos search
+        logging.info("Navigating to Condos search endpoint...")
         page.goto("https://globaldiscoveryvacations.com/condos/Condos.aspx", wait_until="networkidle", timeout=30000)
-        page.wait_for_timeout(7000)
+        page.wait_for_timeout(5000)
         dismiss_modals(page)
 
-        # 3. Scan all frames (including non-src inline frames)
-        all_contexts = [page] + page.frames
-        logging.info(f"Scanning {len(all_contexts)} total context(s) (page + frames)...")
+        # 3. Extract and log form controls (dropdowns, inputs, buttons)
+        form_elements = page.evaluate("""
+            () => {
+                const selects = Array.from(document.querySelectorAll('select')).map(s => ({
+                    id: s.id,
+                    name: s.name,
+                    optionsCount: s.options.length,
+                    first3Options: Array.from(s.options).slice(0, 3).map(o => o.text.trim())
+                }));
+                const buttons = Array.from(document.querySelectorAll('input[type="submit"], button, input[type="button"]')).map(b => ({
+                    id: b.id,
+                    value: b.value || b.innerText,
+                    name: b.name
+                }));
+                return { selects, buttons };
+            }
+        """)
 
+        logging.info(f"Form controls found: {json.dumps(form_elements, indent=2)}")
+
+        # 4. Attempt to trigger search submit on identified ASP.NET controls
+        select_ids = [s['id'] for s in form_elements.get('selects', []) if s['id']]
+        button_ids = [b['id'] for b in form_elements.get('buttons', []) if b['id']]
+
+        # If select dropdowns exist, select option index 1 (first actual value) to trigger postback/populating dependent lists
+        for sel_id in select_ids:
+            try:
+                page.select_option(f"#{sel_id}", index=1)
+                page.wait_for_timeout(2000)
+            except Exception as e:
+                logging.warning(f"Could not select option on #{sel_id}: {e}")
+
+        # Click the primary submit button
+        if button_ids:
+            primary_btn = button_ids[0]
+            logging.info(f"Clicking primary form button: #{primary_btn}")
+            try:
+                page.click(f"#{primary_btn}")
+                page.wait_for_timeout(7000)
+            except Exception as e:
+                logging.warning(f"Error clicking #{primary_btn}: {e}")
+
+        # 5. Extract results after submit
         card_selectors = [
             "table[id*='Grid'] tr",
             "table[id*='rg'] tr",
@@ -157,62 +190,26 @@ def run_gdv_scrape():
             ".resort-card",
             ".inventory-item",
             "table.table tr",
-            ".card",
-            "div[class*='resort']",
-            "div[class*='inventory']"
+            ".card"
         ]
 
         listings = []
-
-        for idx, ctx in enumerate(all_contexts):
-            if is_context_detached(ctx):
-                continue
-            logging.info(f"Checking context #{idx} (URL: {getattr(ctx, 'url', 'N/A')})...")
-
-            # Try interacting with any search button in frame/page
-            search_btns = ctx.locator("input[type='submit'], button, a:has-text('Search'), div:has-text('Search')")
+        for selector in card_selectors:
             try:
-                cnt = search_btns.count()
-                if cnt > 0:
-                    logging.info(f"Found {cnt} potential search control(s) in context #{idx}.")
-                    for b_idx in range(min(cnt, 3)):
-                        btn = search_btns.nth(b_idx)
-                        if btn.is_visible():
-                            logging.info(f"Clicking search control in context #{idx}...")
-                            btn.click(force=True)
-                            page.wait_for_timeout(5000)
-                            break
+                loc = page.locator(selector)
+                count = loc.count()
+                if count > 0:
+                    logging.info(f"Matched {count} elements using selector '{selector}'")
+                    listings = [loc.nth(i) for i in range(count)]
+                    break
             except Exception as e:
-                logging.warning(f"Error checking buttons in context #{idx}: {e}")
-
-            # Extract inventory items from current context
-            for selector in card_selectors:
-                try:
-                    loc = ctx.locator(selector)
-                    count = loc.count()
-                    if count > 0:
-                        logging.info(f"Matched {count} elements in context #{idx} using selector '{selector}'")
-                        listings = [loc.nth(i) for i in range(count)]
-                        break
-                except Exception as e:
-                    logging.warning(f"Selector error in context #{idx}: {e}")
-            if len(listings) > 0:
-                break
+                logging.warning(f"Selector error: {e}")
 
         if len(listings) == 0:
-            logging.info("No listings parsed. Saving debug artifacts (HTML snapshot + screenshot)...")
+            logging.info("No listings parsed. Saving debug artifacts...")
             page.screenshot(path="debug_condos_search_results.png")
-
             with open("debug_condos_page.html", "w", encoding="utf-8") as f:
                 f.write(page.content())
-
-            # Log frame HTML lengths to confirm where content lives
-            for idx, f in enumerate(page.frames):
-                try:
-                    html_len = len(f.content())
-                    logging.info(f"Frame #{idx} HTML length: {html_len} chars | URL: {f.url}")
-                except Exception:
-                    pass
 
         for listing in listings:
             try:
