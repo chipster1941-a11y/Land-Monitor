@@ -96,7 +96,7 @@ def run_gdv_scrape():
 
         # 1. Login to Member Portal
         logging.info("Navigating to GDV Member Portal...")
-        page.goto("https://globaldiscoveryvacations.com/login.aspx", wait_until="domcontentloaded", timeout=60000)
+        page.goto("https://globaldiscoveryvacations.com/login.aspx", wait_until="networkidle", timeout=60000)
 
         clean_member_id = GDV_MEMBER_ID.strip().strip("'\"") if GDV_MEMBER_ID else ""
         clean_password = GDV_PASSWORD.strip().strip("'\"") if GDV_PASSWORD else ""
@@ -128,61 +128,63 @@ def run_gdv_scrape():
             with page.expect_navigation(timeout=20000):
                 pass_input.press("Enter")
         except Exception:
-            page.wait_for_timeout(4000)
+            page.wait_for_timeout(5000)
 
         logging.info(f"Member login successful! Current URL: {page.url}")
 
         dismiss_modals(page)
 
-        # 2. Direct route to Condos search endpoint
+        # 2. Direct route to Condos search endpoint with networkidle wait
         logging.info("Navigating directly to Condos search endpoint...")
-        page.goto("https://globaldiscoveryvacations.com/condos/Condos.aspx", wait_until="domcontentloaded", timeout=30000)
-        page.wait_for_timeout(4000)
+        page.goto("https://globaldiscoveryvacations.com/condos/Condos.aspx", wait_until="networkidle", timeout=30000)
+        
+        # Extended wait to allow ASP.NET AJAX rendering
+        logging.info("Waiting 7 seconds for AJAX search form controls to render...")
+        page.wait_for_timeout(7000)
 
         dismiss_modals(page)
 
-        # 3. Traversal across all frames (main page + iframes) to find search controls
+        # 3. Traversal across all frames (main page + iframes) to locate interactive search controls
         logging.info("Scanning all frames for search form controls...")
         all_frames = [page] + page.frames
         
         search_frame = page
-        found_controls = False
 
         for idx, frame in enumerate(all_frames):
             selects = frame.locator("select")
             inputs = frame.locator("input, button, a")
             
             sel_count = selects.count()
+            input_count = inputs.count()
+            logging.info(f"Frame #{idx} ('{frame.name}') contains {sel_count} <select> and {input_count} interactive inputs.")
+            
             if sel_count > 0:
-                logging.info(f"Frame #{idx} ('{frame.name}') contains {sel_count} <select> dropdowns!")
                 search_frame = frame
-                found_controls = True
-                
                 for s_i in range(sel_count):
                     s_elem = selects.nth(s_i)
                     s_id = s_elem.get_attribute("id") or f"sel_{s_i}"
                     opts = s_elem.locator("option")
                     opt_list = [opts.nth(o_i).inner_text().strip() for o_i in range(min(opts.count(), 8))]
                     logging.info(f"  Dropdown [{s_id}] options: {opt_list}")
-                break
 
-        # 4. Trigger Search Button in the target frame
+        # 4. Trigger Search / Postback Button across all detected buttons
         search_triggers = [
             "input[value*='Search']",
             "input[value*='Filter']",
             "button:has-text('Search')",
             "a:has-text('Search')",
             "input[id*='btnSearch']",
-            "a[id*='lbSearch']"
+            "a[id*='lbSearch']",
+            "input[type='submit']"
         ]
 
         for trigger in search_triggers:
             btn = search_frame.locator(trigger).first
             if btn.is_visible():
-                logging.info(f"Triggering search button '{trigger}' inside frame...")
+                logging.info(f"Triggering search button '{trigger}' inside target frame...")
                 try:
                     btn.click(force=True)
-                    page.wait_for_timeout(5000)
+                    page.wait_for_timeout(6000)
                 except Exception as e:
                     logging.warning(f"Error clicking search trigger: {e}")
                 break
@@ -197,6 +199,7 @@ def run_gdv_scrape():
             ".search-result-item",
             ".resort-card",
             ".inventory-item",
+            "table tr",
             "div[class*='resort']",
             "div[class*='inventory']",
             "div[class*='card']"
