@@ -143,48 +143,49 @@ def run_gdv_scrape():
 
         dismiss_modals(page)
 
-        # 3. Log all visible input buttons / submit triggers across main page
+        # 3. Broad click search on text matches
         all_frames = [page] + page.frames
-        logging.info("Searching for interactive search buttons across all frames...")
+        logging.info("Attempting click on any clickable element containing 'Search'...")
 
-        search_triggers = [
-            "input[type='submit']",
-            "input[value*='Search']",
-            "input[value*='Filter']",
-            "button:has-text('Search')",
-            "a:has-text('Search')",
-            "input[id*='btn']",
-            "a[id*='btn']",
-            "button[id*='btn']",
-            "input[id*='Search']",
-            "a[id*='Search']"
-        ]
-
-        clicked_button = False
+        clicked = False
         for frame in all_frames:
-            for trigger in search_triggers:
-                matching_btns = frame.locator(trigger)
-                count = matching_btns.count()
-                if count > 0:
-                    for b_i in range(count):
-                        btn = matching_btns.nth(b_i)
-                        if btn.is_visible():
-                            btn_text = btn.inner_text().strip() or btn.get_attribute("value") or btn.get_attribute("id") or "unnamed_btn"
-                            logging.info(f"Found visible search candidate: '{btn_text}' using selector '{trigger}'")
-                            try:
-                                btn.click(force=True)
-                                logging.info(f"Successfully clicked button '{btn_text}'!")
-                                clicked_button = True
-                                page.wait_for_timeout(6000)
-                                break
-                            except Exception as e:
-                                logging.warning(f"Failed to click '{btn_text}': {e}")
-                if clicked_button:
-                    break
-            if clicked_button:
+            # Query elements with text containing Search or Filter
+            candidates = frame.locator("*:has-text('Search'), *:has-text('Filter')")
+            count = candidates.count()
+            logging.info(f"Found {count} text match candidates in frame.")
+
+            for i in range(count):
+                el = candidates.nth(i)
+                tag_name = el.evaluate("e => e.tagName.toLowerCase()")
+                # Only click interactive or leaf elements
+                if tag_name in ["button", "a", "input", "span", "div"] and el.is_visible():
+                    text_val = el.inner_text().strip()
+                    if text_val and len(text_val) < 25:
+                        logging.info(f"Attempting click on <{tag_name}> element: '{text_val}'")
+                        try:
+                            el.click(force=True)
+                            clicked = True
+                            page.wait_for_timeout(6000)
+                            break
+                        except Exception as e:
+                            logging.warning(f"Click failed on '{text_val}': {e}")
+            if clicked:
                 break
 
-        # 4. Extract Grid / Table Items across all frames
+        # 4. Fallback: Trigger ASP.NET PostBack directly if no click registered
+        if not clicked:
+            logging.info("Attempting direct ASP.NET __doPostBack submission...")
+            try:
+                page.evaluate("""
+                    if (typeof __doPostBack === 'function') {
+                        __doPostBack('', '');
+                    }
+                """)
+                page.wait_for_timeout(5000)
+            except Exception as e:
+                logging.warning(f"__doPostBack invocation failed: {e}")
+
+        # 5. Extract Grid / Table Items across all frames
         card_selectors = [
             "table[id*='Grid'] tr",
             "table[id*='rg'] tr",
@@ -194,7 +195,7 @@ def run_gdv_scrape():
             ".search-result-item",
             ".resort-card",
             ".inventory-item",
-            "table.rgMasterTable tr",
+            "table tr",
             "div[class*='resort']",
             "div[class*='inventory']",
             "div[class*='card']"
@@ -214,8 +215,18 @@ def run_gdv_scrape():
         if len(listings) == 0:
             logging.info("No listings parsed. Saving debug artifacts (HTML snapshot + screenshot)...")
             page.screenshot(path="debug_condos_search_results.png")
+            
+            # Save HTML snapshot
             with open("debug_condos_page.html", "w", encoding="utf-8") as f:
                 f.write(page.content())
+                
+            # Log all visible buttons/links on page for diagnostic inspection
+            buttons_dump = page.evaluate("""
+                () => Array.from(document.querySelectorAll('a, button, input[type="button"], input[type="submit"], div[class*="btn"]'))
+                    .map(e => ({ tag: e.tagName, id: e.id, class: e.className, text: e.innerText || e.value }))
+                    .filter(e => e.text && e.text.trim().length > 0)
+            """)
+            logging.info(f"Visible actionable elements on page: {json.dumps(buttons_dump[:15], indent=2)}")
 
         for listing in listings:
             try:
