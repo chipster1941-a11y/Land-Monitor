@@ -80,34 +80,43 @@ def run_gdv_scrape():
         page = context.new_page()
 
         # 1. Login to Member Portal
-        logging.info("Navigating to GDV Member Login Portal...")
-        page.goto("https://globaldiscoveryvacations.com/login.aspx?cookieCheck=true", wait_until="domcontentloaded", timeout=60000)
+        logging.info("Navigating to GDV Member Portal...")
+        page.goto("https://globaldiscoveryvacations.com/login.aspx", wait_until="networkidle", timeout=60000)
 
-        username_selector = "#ctl00_body_tbLoginUsername, input[id*='tbLoginUsername'], input[name*='Username']"
-        password_selector = "#ctl00_body_tbLoginPassword, input[id*='tbLoginPassword'], input[type='password']"
-        submit_selector = "#ctl00_body_btnLogin, input[id*='btnLogin'], input[type='submit']"
+        # Broad selectors matching any text/username field and password field
+        username_selector = "input[type='text'], input[name*='User'], input[id*='Username'], input[id*='tbLogin']"
+        password_selector = "input[type='password']"
+        submit_selector = "input[type='submit'], button[type='submit'], input[value*='Login'], a:has-text('Login')"
 
         clean_member_id = GDV_MEMBER_ID.strip().strip("'\"") if GDV_MEMBER_ID else ""
         clean_password = GDV_PASSWORD.strip().strip("'\"") if GDV_PASSWORD else ""
 
-        logging.info("Submitting member login credentials...")
-        page.wait_for_selector(username_selector, timeout=15000)
-        page.fill(username_selector, clean_member_id)
-        page.fill(password_selector, clean_password)
+        logging.info("Waiting for login inputs...")
+        try:
+            page.wait_for_selector(username_selector, timeout=20000)
+        except Exception:
+            logging.warning("Selector timeout on login.aspx. Attempting direct fill on first visible text input...")
 
+        # Fill inputs
+        page.locator(username_selector).first.fill(clean_member_id)
+        page.locator(password_selector).first.fill(clean_password)
+
+        logging.info("Submitting member login credentials...")
         try:
             with page.expect_navigation(timeout=20000):
-                page.click(submit_selector)
+                page.locator(submit_selector).first.click()
         except Exception:
-            page.wait_for_timeout(3000)
+            page.wait_for_timeout(4000)
 
         if "login.aspx" in page.url.lower():
             page.screenshot(path="debug_login_failed.png")
+            page_text = page.locator("body").inner_text()
+            logging.error(f"Page text excerpt: {page_text[:400].replace(chr(10), ' ').strip()}")
             raise Exception("Authentication failed on member login.aspx.")
 
         logging.info(f"Member login successful! Current URL: {page.url}")
 
-        # 2. Automatically locate and navigate to Search/Destinations
+        # 2. Locate and navigate to Search/Destinations
         search_selectors = [
             "a:has-text('Destinations')",
             "a:has-text('Search')",
@@ -137,11 +146,8 @@ def run_gdv_scrape():
         listings = page.query_selector_all(card_selectors)
         logging.info(f"Scraped {len(listings)} matching listing elements.")
 
-        # Log page text snippet if 0 items are found to monitor ASP.NET state
         if len(listings) == 0:
             page.screenshot(path="debug_empty_search.png")
-            page_text = page.locator("body").inner_text()
-            logging.info(f"Page content excerpt: {page_text[:400].replace(chr(10), ' ').strip()}")
 
         for listing in listings:
             try:
