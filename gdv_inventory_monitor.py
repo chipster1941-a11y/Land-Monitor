@@ -134,52 +134,60 @@ def run_gdv_scrape():
         # 2. Navigate directly to Condos search
         logging.info("Navigating to Condos search endpoint...")
         page.goto("https://globaldiscoveryvacations.com/condos/Condos.aspx", wait_until="networkidle", timeout=30000)
-        page.wait_for_timeout(5000)
+        page.wait_for_timeout(6000)
         dismiss_modals(page)
 
-        # 3. Extract and log form controls (dropdowns, inputs, buttons)
-        form_elements = page.evaluate("""
-            () => {
-                const selects = Array.from(document.querySelectorAll('select')).map(s => ({
-                    id: s.id,
-                    name: s.name,
-                    optionsCount: s.options.length,
-                    first3Options: Array.from(s.options).slice(0, 3).map(o => o.text.trim())
-                }));
-                const buttons = Array.from(document.querySelectorAll('input[type="submit"], button, input[type="button"]')).map(b => ({
+        # 3. Trigger UI filters and search controls
+        logging.info("Interacting with custom UI filter controls...")
+        
+        # Click "Destination" or "Month" filter button if present
+        for filter_name in ["Destination", "Month", "Vacation Type"]:
+            try:
+                btn = page.locator(f"button:has-text('{filter_name}'), a:has-text('{filter_name}'), div:has-text('{filter_name}')").first
+                if btn.is_visible():
+                    logging.info(f"Clicking filter component: '{filter_name}'")
+                    btn.click(force=True)
+                    page.wait_for_timeout(1500)
+            except Exception as e:
+                logging.warning(f"Filter '{filter_name}' click skipped: {e}")
+
+        # Execute primary search trigger (button with text or search icon)
+        search_triggers = [
+            "button:has-text('Search')",
+            "a:has-text('Search')",
+            "input[value*='Search']",
+            ".btn-search",
+            "#btnSearch",
+            "button[type='submit']"
+        ]
+
+        clicked_search = False
+        for trigger in search_triggers:
+            try:
+                elem = page.locator(trigger).first
+                if elem.is_visible():
+                    logging.info(f"Clicking primary search trigger matching locator: '{trigger}'")
+                    elem.click(force=True)
+                    clicked_search = True
+                    page.wait_for_timeout(7000)
+                    break
+            except Exception:
+                pass
+
+        if not clicked_search:
+            logging.info("No standard 'Search' button matched visually. Dumping all button class names & attributes...")
+            button_details = page.evaluate("""
+                () => Array.from(document.querySelectorAll('button, a.btn, input[type="button"], input[type="submit"]')).map(b => ({
+                    tag: b.tagName,
                     id: b.id,
-                    value: b.value || b.innerText,
-                    name: b.name
-                }));
-                return { selects, buttons };
-            }
-        """)
+                    className: b.className,
+                    text: b.innerText ? b.innerText.trim() : '',
+                    onclick: b.getAttribute('onclick') || ''
+                }))
+            """)
+            logging.info(f"Interactive UI controls map: {json.dumps(button_details, indent=2)}")
 
-        logging.info(f"Form controls found: {json.dumps(form_elements, indent=2)}")
-
-        # 4. Attempt to trigger search submit on identified ASP.NET controls
-        select_ids = [s['id'] for s in form_elements.get('selects', []) if s['id']]
-        button_ids = [b['id'] for b in form_elements.get('buttons', []) if b['id']]
-
-        # If select dropdowns exist, select option index 1 (first actual value) to trigger postback/populating dependent lists
-        for sel_id in select_ids:
-            try:
-                page.select_option(f"#{sel_id}", index=1)
-                page.wait_for_timeout(2000)
-            except Exception as e:
-                logging.warning(f"Could not select option on #{sel_id}: {e}")
-
-        # Click the primary submit button
-        if button_ids:
-            primary_btn = button_ids[0]
-            logging.info(f"Clicking primary form button: #{primary_btn}")
-            try:
-                page.click(f"#{primary_btn}")
-                page.wait_for_timeout(7000)
-            except Exception as e:
-                logging.warning(f"Error clicking #{primary_btn}: {e}")
-
-        # 5. Extract results after submit
+        # 4. Extract Inventory Items
         card_selectors = [
             "table[id*='Grid'] tr",
             "table[id*='rg'] tr",
@@ -190,7 +198,9 @@ def run_gdv_scrape():
             ".resort-card",
             ".inventory-item",
             "table.table tr",
-            ".card"
+            ".card",
+            "div[class*='resort']",
+            "div[class*='result']"
         ]
 
         listings = []
@@ -199,7 +209,7 @@ def run_gdv_scrape():
                 loc = page.locator(selector)
                 count = loc.count()
                 if count > 0:
-                    logging.info(f"Matched {count} elements using selector '{selector}'")
+                    logging.info(f"Matched {count} inventory elements using selector '{selector}'")
                     listings = [loc.nth(i) for i in range(count)]
                     break
             except Exception as e:
