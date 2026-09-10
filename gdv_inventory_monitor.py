@@ -76,37 +76,44 @@ def run_gdv_scrape():
         context = browser.new_context(viewport={"width": 1280, "height": 800})
         page = context.new_page()
 
-        logging.info("Navigating to GDV Login Portal...")
-        page.goto("https://globaldiscoveryvacations.com/agent/login.aspx", wait_until="domcontentloaded", timeout=60000)
+        # 1. Navigate to GDV Member Login Page directly
+        logging.info("Navigating to GDV Member Login Portal...")
+        page.goto("https://globaldiscoveryvacations.com/login.aspx?cookieCheck=true", wait_until="domcontentloaded", timeout=60000)
 
-        # 1. Authenticate using exact GDV login selectors
-        username_selector = "#ctl00_body_tbLoginAgentID"
-        password_selector = "input[type='password']"
-        submit_selector = "input[type='submit'], button[type='submit']"
+        # Selectors specific to member login (ctl00_body_tbLoginUsername / ctl00_body_tbLoginPassword)
+        username_selector = "#ctl00_body_tbLoginUsername, input[id*='tbLoginUsername'], input[name*='Username']"
+        password_selector = "#ctl00_body_tbLoginPassword, input[id*='tbLoginPassword'], input[type='password']"
+        submit_selector = "#ctl00_body_btnLogin, input[id*='btnLogin'], input[type='submit']"
 
-        logging.info("Waiting for login inputs...")
+        clean_member_id = GDV_MEMBER_ID.strip().strip("'\"") if GDV_MEMBER_ID else ""
+        clean_password = GDV_PASSWORD.strip().strip("'\"") if GDV_PASSWORD else ""
+
+        logging.info(f"GDV_MEMBER_ID length: {len(clean_member_id)}")
+        logging.info(f"GDV_PASSWORD length: {len(clean_password)}")
+
+        logging.info("Waiting for member login inputs...")
         page.wait_for_selector(username_selector, timeout=15000)
-        page.fill(username_selector, GDV_MEMBER_ID)
-        page.fill(password_selector, GDV_PASSWORD)
+        page.fill(username_selector, clean_member_id)
+        page.fill(password_selector, clean_password)
 
-        logging.info("Submitting login form...")
+        logging.info("Submitting member login form...")
         
-        # Click login button and explicitly wait for navigation/postback completion
+        # Click login and wait for navigation away from login.aspx
         try:
-            with page.expect_navigation(timeout=15000):
+            with page.expect_navigation(timeout=20000):
                 page.click(submit_selector)
         except Exception:
-            # Fallback pause if navigation happens via AJAX or single-page update
             page.wait_for_timeout(3000)
 
-        # Check if login failed or stayed on login page
+        # Verify authentication status
         if "login.aspx" in page.url.lower():
             logging.error("Still on login page after postback. Extracting page content...")
-            # Capture any error messages displayed on the screen
             page_text = page.locator("body").inner_text()
-            logging.error(f"Page text excerpt: {page_text[:300].strip()}")
+            logging.error(f"Page text excerpt: {page_text[:400].strip()}")
             page.screenshot(path="debug_login_failed.png")
-            raise Exception("Authentication failed or page remained on login.aspx. Check GDV_MEMBER_ID and GDV_PASSWORD secrets.")
+            raise Exception("Authentication failed on member login.aspx. Verify secrets or check debug screenshot.")
+
+        logging.info(f"Member login successful! Redirected to: {page.url}")
 
         # 2. Navigate to search page
         dest_link = page.query_selector("a:has-text('Destinations'), a[href*='Search'], #ctl00_lbDestinations")
@@ -157,6 +164,3 @@ def run_gdv_scrape():
         save_seen_weeks(seen_weeks)
     else:
         logging.info("No new GDV inventory found.")
-
-if __name__ == "__main__":
-    run_gdv_scrape()
