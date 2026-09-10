@@ -90,7 +90,6 @@ def run_gdv_scrape():
 
         logging.info("Locating input fields dynamically...")
 
-        # Search across main page and frames for text and password fields
         target_frame = page
         user_input = None
         pass_input = None
@@ -123,7 +122,6 @@ def run_gdv_scrape():
         except Exception:
             page.wait_for_timeout(4000)
 
-        # Fallback click if still on login.aspx
         if "login.aspx" in page.url.lower():
             logging.info("Executing click fallback on submit elements...")
             login_btn = target_frame.locator("input[type='submit'], button[type='submit'], input[value*='Login'], a:has-text('Login')").first
@@ -142,38 +140,78 @@ def run_gdv_scrape():
 
         logging.info(f"Member login successful! Current URL: {page.url}")
 
-        # 2. Locate and navigate to Search/Destinations
-        search_selectors = [
-            "a:has-text('Destinations')",
+        # 2. Navigate into Search/Inventory Section from members.aspx
+        logging.info("Searching for inventory navigation links...")
+        search_nav_selectors = [
             "a:has-text('Search')",
+            "a:has-text('Destinations')",
             "a:has-text('Resorts')",
-            "a[href*='Search']",
-            "a[href*='Destinations']",
-            "#ctl00_lbDestinations"
+            "a:has-text('Condo')",
+            "a:has-text('Book')",
+            "a[href*='search']",
+            "a[href*='destination']",
+            "a[href*='inventory']",
+            "a[href*='resort']"
         ]
-        
-        for sel in search_selectors:
-            if page.query_selector(sel):
-                logging.info(f"Found navigation link using selector: {sel}")
-                page.click(sel)
-                page.wait_for_load_state("domcontentloaded", timeout=15000)
+
+        nav_clicked = False
+        for sel in search_nav_selectors:
+            elements = page.locator(sel)
+            if elements.count() > 0 and elements.first.is_visible():
+                logging.info(f"Clicking navigation element: {sel}")
+                try:
+                    with page.expect_navigation(timeout=15000):
+                        elements.first.click()
+                except Exception:
+                    elements.first.click()
+                    page.wait_for_timeout(4000)
+                nav_clicked = True
                 break
 
-        # 3. Handle Month/Filter Postback
-        page.wait_for_timeout(4000)
-        filter_button = page.query_selector("a[id*='lbFilter'], input[id*='btnSearch'], button[id*='Search']")
-        if filter_button:
-            logging.info("Triggering search filter postback...")
-            filter_button.click()
-            page.wait_for_timeout(4000)
+        if not nav_clicked:
+            logging.info("Direct navigation links not found; attempting direct search URL load...")
+            page.goto("https://globaldiscoveryvacations.com/search.aspx", wait_until="domcontentloaded", timeout=30000)
+            page.wait_for_timeout(3000)
 
-        # 4. Scrape All Grid Cards
-        card_selectors = ".condo-item, .search-result-item, .resort-card, .inventory-item, .grid-item, tr.rgRow, tr.rgAltRow"
-        listings = page.query_selector_all(card_selectors)
-        logging.info(f"Scraped {len(listings)} matching listing elements.")
+        logging.info(f"Navigated to Search URL: {page.url}")
+
+        # 3. Handle Filter/Search Trigger if present
+        filter_buttons = page.locator("input[value*='Search'], button:has-text('Search'), a:has-text('Search'), input[id*='btnSearch']")
+        if filter_buttons.count() > 0 and filter_buttons.first.is_visible():
+            logging.info("Triggering search/filter submission...")
+            try:
+                filter_buttons.first.click()
+                page.wait_for_timeout(5000)
+            except Exception as e:
+                logging.warning(f"Filter click issue: {e}")
+
+        # 4. Scrape Cards / Inventory Rows
+        card_selectors = [
+            ".condo-item",
+            ".search-result-item",
+            ".resort-card",
+            ".inventory-item",
+            ".grid-item",
+            ".resort",
+            "tr.rgRow",
+            "tr.rgAltRow",
+            "div[class*='resort']",
+            "div[class*='inventory']",
+            "div[class*='card']"
+        ]
+
+        listings = []
+        for selector in card_selectors:
+            found = page.query_selector_all(selector)
+            if len(found) > 0:
+                logging.info(f"Matched {len(found)} elements using selector '{selector}'")
+                listings = found
+                break
 
         if len(listings) == 0:
-            page.screenshot(path="debug_empty_search.png")
+            page.screenshot(path="debug_member_search.png")
+            page_text = page.locator("body").inner_text()
+            logging.info(f"Search page snippet: {page_text[:300].replace(chr(10), ' ').strip()}")
 
         for listing in listings:
             try:
