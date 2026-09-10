@@ -68,24 +68,6 @@ def send_email_notification(new_weeks):
 
 def dismiss_modals(page):
     """Detects and closes popup modals interrupting navigation."""
-    modal_close_selectors = [
-        "button.close",
-        ".modal .close",
-        "button:has-text('Close')",
-        "button:has-text('Skip')",
-        "a:has-text('Close')",
-        "a:has-text('Skip')"
-    ]
-
-    for sel in modal_close_selectors:
-        close_btn = page.locator(sel).first
-        if close_btn.is_visible():
-            try:
-                close_btn.click(force=True)
-                page.wait_for_timeout(1000)
-            except Exception:
-                pass
-
     try:
         page.evaluate("""
             () => {
@@ -155,90 +137,87 @@ def run_gdv_scrape():
         # 2. Direct route to Condos search endpoint
         logging.info("Navigating directly to Condos search endpoint...")
         page.goto("https://globaldiscoveryvacations.com/condos/Condos.aspx", wait_until="domcontentloaded", timeout=30000)
-        page.wait_for_timeout(3000)
+        page.wait_for_timeout(4000)
 
         dismiss_modals(page)
 
-        # 3. Inspect and adjust search form inputs
-        logging.info("Inspecting available form dropdowns on Condos.aspx...")
-        selects = page.locator("select")
-        select_count = selects.count()
-        logging.info(f"Found {select_count} select dropdowns on search page.")
+        # 3. Traversal across all frames (main page + iframes) to find search controls
+        logging.info("Scanning all frames for search form controls...")
+        all_frames = [page] + page.frames
+        
+        search_frame = page
+        found_controls = False
 
-        for i in range(select_count):
-            sel_elem = selects.nth(i)
-            sel_id = sel_elem.get_attribute("id") or f"index_{i}"
-            sel_name = sel_elem.get_attribute("name") or ""
+        for idx, frame in enumerate(all_frames):
+            selects = frame.locator("select")
+            inputs = frame.locator("input, button, a")
             
-            # Print available options for debugging
-            options = sel_elem.locator("option")
-            opt_texts = [options.nth(j).inner_text().strip() for j in range(min(options.count(), 10))]
-            logging.info(f"Dropdown [{sel_id} / {sel_name}] options preview: {opt_texts}")
+            sel_count = selects.count()
+            if sel_count > 0:
+                logging.info(f"Frame #{idx} ('{frame.name}') contains {sel_count} <select> dropdowns!")
+                search_frame = frame
+                found_controls = True
+                
+                for s_i in range(sel_count):
+                    s_elem = selects.nth(s_i)
+                    s_id = s_elem.get_attribute("id") or f"sel_{s_i}"
+                    opts = s_elem.locator("option")
+                    opt_list = [opts.nth(o_i).inner_text().strip() for o_i in range(min(opts.count(), 8))]
+                    logging.info(f"  Dropdown [{s_id}] options: {opt_list}")
+                break
 
-            # Try selecting Month or Date matching filters if present
-            if "month" in sel_id.lower() or "month" in sel_name.lower():
-                for j in range(options.count()):
-                    opt_text = options.nth(j).inner_text().strip()
-                    if "2027" in opt_text or "Oct" in opt_text or "Sep" in opt_text or "Nov" in opt_text:
-                        logging.info(f"Selecting option '{opt_text}' in dropdown {sel_id}")
-                        sel_elem.select_option(index=j)
-                        break
-
-        # 4. Trigger Search / Postback Button
+        # 4. Trigger Search Button in the target frame
         search_triggers = [
             "input[value*='Search']",
             "input[value*='Filter']",
             "button:has-text('Search')",
             "a:has-text('Search')",
             "input[id*='btnSearch']",
-            "input[id*='btnSubmit']",
             "a[id*='lbSearch']"
         ]
 
-        search_clicked = False
-        for trigger_sel in search_triggers:
-            btn = page.locator(trigger_sel).first
+        for trigger in search_triggers:
+            btn = search_frame.locator(trigger).first
             if btn.is_visible():
-                logging.info(f"Clicking search trigger: '{trigger_sel}'...")
+                logging.info(f"Triggering search button '{trigger}' inside frame...")
                 try:
-                    with page.expect_navigation(timeout=15000):
-                        btn.click(force=True)
-                except Exception:
                     btn.click(force=True)
                     page.wait_for_timeout(5000)
-                search_clicked = True
+                except Exception as e:
+                    logging.warning(f"Error clicking search trigger: {e}")
                 break
 
-        if not search_clicked:
-            logging.info("No explicit search button found; checking default table contents...")
-
-        # 5. Extract Inventory Results
+        # 5. Extract Grid / Table Items across all frames
         card_selectors = [
             "table[id*='Grid'] tr",
             "table[id*='rg'] tr",
+            "tr.rgRow",
+            "tr.rgAltRow",
             ".condo-item",
             ".search-result-item",
             ".resort-card",
             ".inventory-item",
-            "tr.rgRow",
-            "tr.rgAltRow",
             "div[class*='resort']",
             "div[class*='inventory']",
             "div[class*='card']"
         ]
 
         listings = []
-        for selector in card_selectors:
-            found = page.query_selector_all(selector)
-            if len(found) > 0:
-                logging.info(f"Matched {len(found)} elements using selector '{selector}'")
-                listings = found
+        for frame in all_frames:
+            for selector in card_selectors:
+                found = frame.query_selector_all(selector)
+                if len(found) > 0:
+                    logging.info(f"Matched {len(found)} elements in frame using selector '{selector}'")
+                    listings = found
+                    break
+            if len(listings) > 0:
                 break
 
         if len(listings) == 0:
+            logging.info("No listings parsed. Saving debug artifacts (HTML snapshot + screenshot)...")
             page.screenshot(path="debug_condos_search_results.png")
-            page_text = page.locator("body").inner_text()
-            logging.info(f"Result page snippet: {page_text[:500].replace(chr(10), ' ').strip()}")
+            with open("debug_condos_page.html", "w", encoding="utf-8") as f:
+                f.write(page.content())
 
         for listing in listings:
             try:
