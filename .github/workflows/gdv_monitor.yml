@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Check out repository
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -24,9 +24,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install playwright
-          playwright install --with-deps chromium
+          playwright install chromium
 
-      - name: Execute GDV Monitor Script
+      - name: Run GDV Inventory Monitor
         env:
           GDV_MEMBER_ID: ${{ secrets.GDV_MEMBER_ID }}
           GDV_PASSWORD: ${{ secrets.GDV_PASSWORD }}
@@ -36,14 +36,14 @@ jobs:
         run: |
           python gdv_inventory_monitor.py
 
-          - name: Commit and push state changes
-          run: |
-            git config --local user.email "action@github.com"
-            git config --local user.name "GitHub Action Bot"
-            if [ -f "seen_gdv_weeks.json" ]; then
-              git add seen_gdv_weeks.json
-              git diff-index --quiet HEAD || git commit -m "Automated update: seen_gdv_weeks.json"
-              git push
-            else
-              echo "No state file found to commit."
-            fi
+      - name: Commit and push state changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action Bot"
+          if [ -f "seen_gdv_weeks.json" ]; then
+            git add seen_gdv_weeks.json
+            git diff-index --quiet HEAD || git commit -m "Automated update: seen_gdv_weeks.json"
+            git push
+          else
+            echo "No state file found to commit."
+          fi
