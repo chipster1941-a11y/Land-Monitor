@@ -39,6 +39,15 @@ def save_seen_weeks(seen_weeks):
         logging.error(f"Error saving seen weeks: {e}")
 
 
+def clean_resort_text(raw_text):
+    """Cleans up raw extracted text by removing clutter like 'View Resort' buttons."""
+    # Remove recurring UI button noise
+    text = raw_text.replace("View Resort", "").replace("VIEW RESORT", "").strip()
+    # Normalize multiple whitespaces into a single space
+    clean = " ".join(text.split())
+    return clean
+
+
 def send_email_notification(new_weeks):
     if not EMAIL_SENDER or not EMAIL_PASSWORD or not EMAIL_RECEIVER:
         logging.warning("Email credentials not fully set. Skipping email alert.")
@@ -47,11 +56,19 @@ def send_email_notification(new_weeks):
     msg = MIMEMultipart()
     msg["From"] = EMAIL_SENDER
     msg["To"] = EMAIL_RECEIVER
-    msg["Subject"] = f"🚨 New GDV Inventory Alert: {len(new_weeks)} New Listing(s)!"
+    msg["Subject"] = f"🚨 GDV Inventory Alert: {len(new_weeks)} New Resort Listing(s) Found!"
 
-    body_text = f"Found {len(new_weeks)} new availability match(es) for {TARGET_MONTH_LABEL}:\n\n"
-    for item in new_weeks:
-        body_text += f"• {item['title']}\n"
+    # Formatted plain-text email body
+    body_text = f"Global Discovery Vacations - New Inventory Alert\n"
+    body_text += f"{'=' * 50}\n"
+    body_text += f"Target Search Window: {TARGET_MONTH_LABEL}\n"
+    body_text += f"Total New Listings Found: {len(new_weeks)}\n\n"
+    
+    for idx, item in enumerate(new_weeks, start=1):
+        body_text += f"{idx}. {item['clean_title']}\n"
+        body_text += f"   --------------------------------------------------\n"
+
+    body_text += f"\nLog into GDV Member Portal to view details: https://globaldiscoveryvacations.com/members.aspx\n"
 
     msg.attach(MIMEText(body_text, "plain"))
 
@@ -61,7 +78,7 @@ def send_email_notification(new_weeks):
         server.login(EMAIL_SENDER, EMAIL_PASSWORD)
         server.sendmail(EMAIL_SENDER, EMAIL_RECEIVER, msg.as_string())
         server.quit()
-        logging.info("Email notification sent successfully!")
+        logging.info("Formatted email notification sent successfully!")
     except Exception as e:
         logging.error(f"Failed to send email: {e}")
 
@@ -140,7 +157,6 @@ def run_gdv_scrape():
         # 3. Locate elements based on 'View Resort' action buttons
         logging.info("Searching for resort containers via 'View Resort' action links...")
         
-        # Primary strategy: find all 'View Resort' links and pull their parent container text
         view_resort_links = page.locator("a:has-text('View Resort')")
         link_count = view_resort_links.count()
         logging.info(f"Found {link_count} 'View Resort' listing triggers on page.")
@@ -150,22 +166,19 @@ def run_gdv_scrape():
         if link_count > 0:
             for i in range(link_count):
                 try:
-                    # Get enclosing card/row container element
                     container = view_resort_links.nth(i).locator("xpath=ancestor::div[contains(@class, 'col-') or contains(@class, 'card') or contains(@class, 'item') or contains(@class, 'resort')][1]")
                     
                     if container.count() == 0:
-                        # Fallback to direct parent paragraph or div
                         container = view_resort_links.nth(i).locator("xpath=..")
 
                     card_text = container.inner_text().strip()
-                    # Clean up whitespace
-                    clean_text = " ".join(card_text.split())
-                    if len(clean_text) > 10:
-                        parsed_items.append(clean_text)
+                    cleaned = clean_resort_text(card_text)
+                    if len(cleaned) > 10:
+                        parsed_items.append(cleaned)
                 except Exception as e:
                     logging.warning(f"Error extracting resort card index {i}: {e}")
 
-        # Fallback strategy: selector scan if anchor parent extraction yields nothing
+        # Fallback strategy if ancestor extraction yields nothing
         if not parsed_items:
             fallback_selectors = [
                 ".thumbnail",
@@ -177,10 +190,9 @@ def run_gdv_scrape():
             for selector in fallback_selectors:
                 loc = page.locator(selector)
                 if loc.count() > 0:
-                    logging.info(f"Fallback selector '{selector}' matched {loc.count()} items.")
                     for j in range(loc.count()):
-                        txt = " ".join(loc.nth(j).inner_text().split())
-                        if "View Resort" in txt and len(txt) > 15:
+                        txt = clean_resort_text(loc.nth(j).inner_text())
+                        if len(txt) > 15:
                             parsed_items.append(txt)
                     if parsed_items:
                         break
@@ -189,13 +201,12 @@ def run_gdv_scrape():
 
         # 4. Evaluate new listings
         for item_text in parsed_items:
-            # First 100 characters serve as a distinct fingerprint
             item_id = item_text[:100]
 
             if item_id not in seen_weeks:
                 seen_weeks.add(item_id)
                 new_weeks.append({
-                    "title": item_text,
+                    "clean_title": item_text,
                     "dates": TARGET_MONTH_LABEL
                 })
 
