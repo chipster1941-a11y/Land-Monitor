@@ -90,12 +90,18 @@ def run_gdv_scrape():
         page.fill(password_selector, GDV_PASSWORD)
 
         logging.info("Submitting login form...")
-        page.click(submit_selector)
-        page.wait_for_load_state("domcontentloaded", timeout=15000)
+        
+        # Click login button and explicitly wait for navigation/postback completion
+        try:
+            with page.expect_navigation(timeout=15000):
+                page.click(submit_selector)
+        except Exception:
+            # Fallback pause if navigation happens via AJAX or single-page update
+            page.wait_for_timeout(3000)
 
         # Check if login failed or stayed on login page
         if "login.aspx" in page.url.lower():
-            logging.error("Still on login page. Checking for login error messages...")
+            logging.error("Still on login page after postback. Checking for login error messages...")
             error_el = page.query_selector(".alert, .error, #ctl00_body_lblError, .text-danger")
             if error_el:
                 logging.error(f"Login failed message: {error_el.inner_text().strip()}")
