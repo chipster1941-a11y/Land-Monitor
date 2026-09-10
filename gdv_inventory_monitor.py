@@ -86,33 +86,53 @@ def run_gdv_scrape():
         clean_member_id = GDV_MEMBER_ID.strip().strip("'\"") if GDV_MEMBER_ID else ""
         clean_password = GDV_PASSWORD.strip().strip("'\"") if GDV_PASSWORD else ""
 
-        logging.info("Locating exact member input elements...")
-        
-        # Specific ASP.NET Member login field selectors
-        user_input = page.locator("#ctl00_body_tbUsername, input[id*='tbUsername'], input[name*='tbUsername']").first
-        pass_input = page.locator("#ctl00_body_tbPassword, input[id*='tbPassword'], input[name*='tbPassword']").first
-        login_btn = page.locator("#ctl00_body_btnLogin, input[id*='btnLogin'], input[value='Login']").first
+        page.wait_for_timeout(3000)
 
-        user_input.wait_for(state="visible", timeout=20000)
+        logging.info("Locating input fields dynamically...")
+
+        # Search across main page and frames for text and password fields
+        target_frame = page
+        user_input = None
+        pass_input = None
+
+        frames_to_check = [page] + page.frames
+        for frame in frames_to_check:
+            txt_loc = frame.locator("input[type='text'], input[type='email'], input:not([type])").filter(has_not_text="")
+            pwd_loc = frame.locator("input[type='password']")
+
+            if txt_loc.count() > 0 and pwd_loc.count() > 0:
+                target_frame = frame
+                user_input = txt_loc.first
+                pass_input = pwd_loc.first
+                break
+
+        if not user_input or not pass_input:
+            page.screenshot(path="debug_login_missing_inputs.png")
+            page_text = page.locator("body").inner_text()
+            logging.error(f"Page text excerpt: {page_text[:400].replace(chr(10), ' ').strip()}")
+            raise Exception("Could not locate username/password fields on page or subframes.")
+
+        logging.info("Filling credentials into detected fields...")
         user_input.fill(clean_member_id)
         pass_input.fill(clean_password)
 
-        logging.info("Submitting login form via Enter key & click trigger...")
+        logging.info("Submitting login form via Enter press...")
         try:
-            with page.expect_navigation(timeout=25000):
-                # Pressing enter inside the password field triggers ASP.NET form postback reliably
+            with page.expect_navigation(timeout=20000):
                 pass_input.press("Enter")
         except Exception:
-            page.wait_for_timeout(5000)
+            page.wait_for_timeout(4000)
 
-        # Fallback click if still on login page
-        if "login.aspx" in page.url.lower() and login_btn.is_visible():
-            logging.info("Attempting direct button click fallback...")
-            try:
-                with page.expect_navigation(timeout=20000):
-                    login_btn.click()
-            except Exception:
-                page.wait_for_timeout(5000)
+        # Fallback click if still on login.aspx
+        if "login.aspx" in page.url.lower():
+            logging.info("Executing click fallback on submit elements...")
+            login_btn = target_frame.locator("input[type='submit'], button[type='submit'], input[value*='Login'], a:has-text('Login')").first
+            if login_btn.is_visible():
+                try:
+                    with page.expect_navigation(timeout=15000):
+                        login_btn.click()
+                except Exception:
+                    page.wait_for_timeout(4000)
 
         if "login.aspx" in page.url.lower():
             page.screenshot(path="debug_login_failed.png")
