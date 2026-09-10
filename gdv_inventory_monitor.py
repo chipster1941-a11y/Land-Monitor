@@ -6,66 +6,69 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from playwright.sync_api import sync_playwright
 
-# Configure logging
+# Logging Configuration
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 # Environment Variables
-GDV_MEMBER_ID = os.environ.get("GDV_MEMBER_ID")
-GDV_PASSWORD = os.environ.get("GDV_PASSWORD")
-EMAIL_SENDER = os.environ.get("EMAIL_SENDER")
-EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
-EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER")
+GDV_MEMBER_ID = os.getenv("GDV_MEMBER_ID")
+GDV_PASSWORD = os.getenv("GDV_PASSWORD")
+EMAIL_SENDER = os.getenv("EMAIL_SENDER")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
+EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
 
-STATE_FILE = "seen_gdv_weeks.json"
-TARGET_MONTH_LABEL = "September, 2027"
+SEEN_WEEKS_FILE = "seen_gdv_weeks.json"
+TARGET_MONTH_LABEL = "Fall 2027"
+
 
 def load_seen_weeks():
-    if os.path.exists(STATE_FILE):
+    if os.path.exists(SEEN_WEEKS_FILE):
         try:
-            with open(STATE_FILE, "r") as f:
+            with open(SEEN_WEEKS_FILE, "r") as f:
                 return set(json.load(f))
         except Exception as e:
-            logging.error(f"Error reading state file {STATE_FILE}: {e}")
+            logging.error(f"Error loading seen weeks: {e}")
     return set()
 
-def save_seen_weeks(seen_set):
-    try:
-        with open(STATE_FILE, "w") as f:
-            json.dump(sorted(list(seen_set)), f, indent=2)
-    except Exception as e:
-        logging.error(f"Error saving state file {STATE_FILE}: {e}")
 
-def send_email_notification(new_listings):
+def save_seen_weeks(seen_weeks):
+    try:
+        with open(SEEN_WEEKS_FILE, "w") as f:
+            json.dump(list(seen_weeks), f, indent=2)
+        logging.info("Saved updated seen weeks state.")
+    except Exception as e:
+        logging.error(f"Error saving seen weeks: {e}")
+
+
+def send_email_notification(new_weeks):
     if not EMAIL_SENDER or not EMAIL_PASSWORD or not EMAIL_RECEIVER:
-        logging.warning("Email environment variables missing. Skipping email notification.")
+        logging.warning("Email credentials not fully set. Skipping email alert.")
         return
 
     msg = MIMEMultipart()
     msg["From"] = EMAIL_SENDER
     msg["To"] = EMAIL_RECEIVER
-    msg["Subject"] = f"GDV Alert: {len(new_listings)} New Weeks Available for Fall 2027!"
+    msg["Subject"] = f"🚨 New GDV Inventory Alert: {len(new_weeks)} New Listing(s)!"
 
-    body_text = f"Found {len(new_listings)} new matching GDV week(s) for {TARGET_MONTH_LABEL}:\n\n"
-    for item in new_listings:
-        body_text += f"• {item.get('title', 'N/A')}\n"
-        body_text += f"  Dates: {item.get('dates', 'N/A')}\n"
-        body_text += f"  Resort: {item.get('resort', 'N/A')}\n"
-        body_text += f"  Unit: {item.get('unit', 'N/A')}\n\n"
+    body_text = f"Found {len(new_weeks)} new availability match(es) for {TARGET_MONTH_LABEL}:\n\n"
+    for item in new_weeks:
+        body_text += f"• {item['title']}\n"
 
     msg.attach(MIMEText(body_text, "plain"))
 
     try:
-        with smtplib.SMTP("smtp.gmail.com", 587) as server:
-            server.starttls()
-            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-            server.send_message(msg)
-        logging.info("Email alert sent successfully.")
+        server = smtplib.SMTP("smtp.gmail.com", 587)
+        server.starttls()
+        server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+        server.sendmail(EMAIL_SENDER, EMAIL_RECEIVER, msg.as_string())
+        server.quit()
+        logging.info("Email notification sent successfully!")
     except Exception as e:
-        logging.error(f"Failed to send email alert: {e}")
+        logging.error(f"Failed to send email: {e}")
+
 
 def run_gdv_scrape():
     if not GDV_MEMBER_ID or not GDV_PASSWORD:
-        logging.error("GDV credentials are missing from environment secrets.")
+        logging.error("GDV credentials missing from environment variables.")
         return
 
     seen_weeks = load_seen_weeks()
@@ -76,11 +79,10 @@ def run_gdv_scrape():
         context = browser.new_context(viewport={"width": 1280, "height": 800})
         page = context.new_page()
 
-        # 1. Navigate to GDV Member Login Page directly
+        # 1. Login to Member Portal
         logging.info("Navigating to GDV Member Login Portal...")
         page.goto("https://globaldiscoveryvacations.com/login.aspx?cookieCheck=true", wait_until="domcontentloaded", timeout=60000)
 
-        # Selectors specific to member login (ctl00_body_tbLoginUsername / ctl00_body_tbLoginPassword)
         username_selector = "#ctl00_body_tbLoginUsername, input[id*='tbLoginUsername'], input[name*='Username']"
         password_selector = "#ctl00_body_tbLoginPassword, input[id*='tbLoginPassword'], input[type='password']"
         submit_selector = "#ctl00_body_btnLogin, input[id*='btnLogin'], input[type='submit']"
@@ -88,79 +90,82 @@ def run_gdv_scrape():
         clean_member_id = GDV_MEMBER_ID.strip().strip("'\"") if GDV_MEMBER_ID else ""
         clean_password = GDV_PASSWORD.strip().strip("'\"") if GDV_PASSWORD else ""
 
-        logging.info(f"GDV_MEMBER_ID length: {len(clean_member_id)}")
-        logging.info(f"GDV_PASSWORD length: {len(clean_password)}")
-
-        logging.info("Waiting for member login inputs...")
+        logging.info("Submitting member login credentials...")
         page.wait_for_selector(username_selector, timeout=15000)
         page.fill(username_selector, clean_member_id)
         page.fill(password_selector, clean_password)
 
-        logging.info("Submitting member login form...")
-        
-        # Click login and wait for navigation away from login.aspx
         try:
             with page.expect_navigation(timeout=20000):
                 page.click(submit_selector)
         except Exception:
             page.wait_for_timeout(3000)
 
-        # Verify authentication status
         if "login.aspx" in page.url.lower():
-            logging.error("Still on login page after postback. Extracting page content...")
-            page_text = page.locator("body").inner_text()
-            logging.error(f"Page text excerpt: {page_text[:400].strip()}")
             page.screenshot(path="debug_login_failed.png")
-            raise Exception("Authentication failed on member login.aspx. Verify secrets or check debug screenshot.")
+            raise Exception("Authentication failed on member login.aspx.")
 
-        logging.info(f"Member login successful! Redirected to: {page.url}")
+        logging.info(f"Member login successful! Current URL: {page.url}")
 
-        # 2. Navigate to search page
-        dest_link = page.query_selector("a:has-text('Destinations'), a[href*='Search'], #ctl00_lbDestinations")
-        if dest_link:
-            dest_link.click()
-            page.wait_for_load_state("domcontentloaded", timeout=15000)
-
-        # 3. Target the Month Filter Button
-        month_selector = "a[id*='lbFilter']"
+        # 2. Automatically locate and navigate to Search/Destinations
+        search_selectors = [
+            "a:has-text('Destinations')",
+            "a:has-text('Search')",
+            "a:has-text('Resorts')",
+            "a[href*='Search']",
+            "a[href*='Destinations']",
+            "#ctl00_lbDestinations"
+        ]
         
-        try:
-            logging.info("Waiting for target month button...")
-            page.wait_for_selector(month_selector, timeout=20000)
-            page.click(month_selector, force=True)
-            page.wait_for_load_state("domcontentloaded", timeout=10000)
-            logging.info("Successfully selected month filter!")
-        except Exception as err:
-            logging.error(f"Failed to find month filter. Current URL: {page.url}")
-            page.screenshot(path="debug_search_page.png")
-            raise err
+        for sel in search_selectors:
+            if page.query_selector(sel):
+                logging.info(f"Found navigation link using selector: {sel}")
+                page.click(sel)
+                page.wait_for_load_state("domcontentloaded", timeout=15000)
+                break
 
-        # 4. Scrape inventory cards
-        page.wait_for_timeout(3000)  # Allow ASP.NET postback grid update to render
-        listings = page.query_selector_all(".condo-item, .search-result-item, .resort-card")
-        logging.info(f"Found {len(listings)} total listings on the page.")
+        # 3. Handle Month/Filter Postback
+        page.wait_for_timeout(4000)
+        filter_button = page.query_selector("a[id*='lbFilter'], input[id*='btnSearch'], button[id*='Search']")
+        if filter_button:
+            logging.info("Triggering search filter postback...")
+            filter_button.click()
+            page.wait_for_timeout(4000)
+
+        # 4. Scrape All Grid Cards
+        card_selectors = ".condo-item, .search-result-item, .resort-card, .inventory-item, .grid-item, tr.rgRow, tr.rgAltRow"
+        listings = page.query_selector_all(card_selectors)
+        logging.info(f"Scraped {len(listings)} matching listing elements.")
+
+        # Log page text snippet if 0 items are found to monitor ASP.NET state
+        if len(listings) == 0:
+            page.screenshot(path="debug_empty_search.png")
+            page_text = page.locator("body").inner_text()
+            logging.info(f"Page content excerpt: {page_text[:400].replace(chr(10), ' ').strip()}")
 
         for listing in listings:
             try:
                 title = listing.inner_text().strip()
-                week_id = title.replace("\n", " ")[:60]
+                week_id = " ".join(title.split())[:80]
 
                 if week_id and week_id not in seen_weeks:
                     seen_weeks.add(week_id)
                     new_weeks.append({
                         "title": week_id,
-                        "dates": TARGET_MONTH_LABEL,
-                        "resort": "GDV Property",
-                        "unit": "Standard"
+                        "dates": TARGET_MONTH_LABEL
                     })
             except Exception as e:
-                logging.warning(f"Error parsing listing item: {e}")
+                logging.warning(f"Error parsing item: {e}")
 
         browser.close()
 
     if new_weeks:
-        logging.info(f"Found {len(new_weeks)} new weeks!")
+        logging.info(f"Found {len(new_weeks)} new GDV listings!")
         send_email_notification(new_weeks)
         save_seen_weeks(seen_weeks)
     else:
         logging.info("No new GDV inventory found.")
+
+
+if __name__ == "__main__":
+    run_gdv_scrape()
