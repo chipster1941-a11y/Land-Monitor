@@ -81,32 +81,38 @@ def run_gdv_scrape():
 
         # 1. Login to Member Portal
         logging.info("Navigating to GDV Member Portal...")
-        page.goto("https://globaldiscoveryvacations.com/login.aspx", wait_until="networkidle", timeout=60000)
-
-        # Broad selectors matching any text/username field and password field
-        username_selector = "input[type='text'], input[name*='User'], input[id*='Username'], input[id*='tbLogin']"
-        password_selector = "input[type='password']"
-        submit_selector = "input[type='submit'], button[type='submit'], input[value*='Login'], a:has-text('Login')"
+        page.goto("https://globaldiscoveryvacations.com/login.aspx", wait_until="domcontentloaded", timeout=60000)
 
         clean_member_id = GDV_MEMBER_ID.strip().strip("'\"") if GDV_MEMBER_ID else ""
         clean_password = GDV_PASSWORD.strip().strip("'\"") if GDV_PASSWORD else ""
 
-        logging.info("Waiting for login inputs...")
-        try:
-            page.wait_for_selector(username_selector, timeout=20000)
-        except Exception:
-            logging.warning("Selector timeout on login.aspx. Attempting direct fill on first visible text input...")
+        logging.info("Locating exact member input elements...")
+        
+        # Specific ASP.NET Member login field selectors
+        user_input = page.locator("#ctl00_body_tbUsername, input[id*='tbUsername'], input[name*='tbUsername']").first
+        pass_input = page.locator("#ctl00_body_tbPassword, input[id*='tbPassword'], input[name*='tbPassword']").first
+        login_btn = page.locator("#ctl00_body_btnLogin, input[id*='btnLogin'], input[value='Login']").first
 
-        # Fill inputs
-        page.locator(username_selector).first.fill(clean_member_id)
-        page.locator(password_selector).first.fill(clean_password)
+        user_input.wait_for(state="visible", timeout=20000)
+        user_input.fill(clean_member_id)
+        pass_input.fill(clean_password)
 
-        logging.info("Submitting member login credentials...")
+        logging.info("Submitting login form via Enter key & click trigger...")
         try:
-            with page.expect_navigation(timeout=20000):
-                page.locator(submit_selector).first.click()
+            with page.expect_navigation(timeout=25000):
+                # Pressing enter inside the password field triggers ASP.NET form postback reliably
+                pass_input.press("Enter")
         except Exception:
-            page.wait_for_timeout(4000)
+            page.wait_for_timeout(5000)
+
+        # Fallback click if still on login page
+        if "login.aspx" in page.url.lower() and login_btn.is_visible():
+            logging.info("Attempting direct button click fallback...")
+            try:
+                with page.expect_navigation(timeout=20000):
+                    login_btn.click()
+            except Exception:
+                page.wait_for_timeout(5000)
 
         if "login.aspx" in page.url.lower():
             page.screenshot(path="debug_login_failed.png")
