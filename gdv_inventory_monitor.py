@@ -134,11 +134,10 @@ def run_gdv_scrape():
 
         dismiss_modals(page)
 
-        # 2. Direct route to Condos search endpoint with networkidle wait
+        # 2. Direct route to Condos search endpoint
         logging.info("Navigating directly to Condos search endpoint...")
         page.goto("https://globaldiscoveryvacations.com/condos/Condos.aspx", wait_until="networkidle", timeout=30000)
         
-        # Extended wait to allow ASP.NET AJAX rendering
         logging.info("Waiting 7 seconds for AJAX search form controls to render...")
         page.wait_for_timeout(7000)
 
@@ -156,7 +155,9 @@ def run_gdv_scrape():
             
             sel_count = selects.count()
             input_count = inputs.count()
-            logging.info(f"Frame #{idx} ('{frame.name}') contains {sel_count} <select> and {input_count} interactive inputs.")
+            
+            frame_name = getattr(frame, "name", "main_page") or f"frame_{idx}"
+            logging.info(f"Frame #{idx} ('{frame_name}') contains {sel_count} <select> and {input_count} interactive inputs.")
             
             if sel_count > 0:
                 search_frame = frame
