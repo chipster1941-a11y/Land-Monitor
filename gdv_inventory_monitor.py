@@ -81,6 +81,13 @@ def dismiss_modals(page):
         pass
 
 
+def is_context_detached(ctx):
+    """Safely checks if a Frame is detached while returning False for Page."""
+    if hasattr(ctx, "is_detached"):
+        return ctx.is_detached()
+    return False
+
+
 def run_gdv_scrape():
     if not GDV_MEMBER_ID or not GDV_PASSWORD:
         logging.error("GDV credentials missing from environment variables.")
@@ -144,17 +151,17 @@ def run_gdv_scrape():
         dismiss_modals(page)
 
         # 3. Broad click search on text matches
-        all_frames = [page] + page.frames
+        all_contexts = [page] + page.frames
         logging.info("Attempting click on any clickable element containing 'Search'...")
 
         clicked = False
-        for frame in all_frames:
-            if frame.is_detached():
+        for ctx in all_contexts:
+            if is_context_detached(ctx):
                 continue
-            candidates = frame.locator("*:has-text('Search'), *:has-text('Filter')")
+            candidates = ctx.locator("*:has-text('Search'), *:has-text('Filter')")
             try:
                 count = candidates.count()
-                logging.info(f"Found {count} text match candidates in frame.")
+                logging.info(f"Found {count} text match candidates in frame/page.")
 
                 for i in range(count):
                     el = candidates.nth(i)
@@ -205,21 +212,21 @@ def run_gdv_scrape():
         ]
 
         listings = []
-        current_frames = [page] + [f for f in page.frames if not f.is_detached()]
+        current_contexts = [page] + [f for f in page.frames if not f.is_detached()]
 
-        for frame in current_frames:
-            if frame.is_detached():
+        for ctx in current_contexts:
+            if is_context_detached(ctx):
                 continue
             for selector in card_selectors:
                 try:
-                    loc = frame.locator(selector)
+                    loc = ctx.locator(selector)
                     count = loc.count()
                     if count > 0:
-                        logging.info(f"Matched {count} elements in frame using selector '{selector}'")
+                        logging.info(f"Matched {count} elements in context using selector '{selector}'")
                         listings = [loc.nth(i) for i in range(count)]
                         break
                 except Exception as e:
-                    logging.warning(f"Skipping selector '{selector}' due to frame detachment/error: {e}")
+                    logging.warning(f"Skipping selector '{selector}' due to detachment/error: {e}")
             if len(listings) > 0:
                 break
 
