@@ -66,6 +66,50 @@ def send_email_notification(new_weeks):
         logging.error(f"Failed to send email: {e}")
 
 
+def dismiss_modals(page):
+    """Detects and closes popup modals interrupting navigation."""
+    logging.info("Checking for popup modals or contact verification overlays...")
+    modal_close_selectors = [
+        "button.close",
+        ".modal .close",
+        "button:has-text('Close')",
+        "button:has-text('Skip')",
+        "button:has-text('Later')",
+        "button:has-text('Remind')",
+        "a:has-text('Close')",
+        "a:has-text('Skip')",
+        "a:has-text('Continue')",
+        "input[value*='Close']",
+        "input[value*='Skip']",
+        "input[value*='Continue']",
+        "div.modal-header .close"
+    ]
+
+    for sel in modal_close_selectors:
+        close_btn = page.locator(sel).first
+        if close_btn.is_visible():
+            logging.info(f"Modal overlay detected! Clicking dismiss element: '{sel}'")
+            try:
+                close_btn.click(force=True)
+                page.wait_for_timeout(2000)
+            except Exception as e:
+                logging.warning(f"Failed to click dismiss button '{sel}': {e}")
+
+    # Fallback: Hide remaining backdrops or modals via DOM manipulation if still present
+    try:
+        page.evaluate("""
+            () => {
+                const backdrops = document.querySelectorAll('.modal-backdrop, .modal');
+                backdrops.forEach(el => el.remove());
+                document.body.classList.remove('modal-open');
+                document.body.style.overflow = 'auto';
+            }
+        """)
+        logging.info("Cleaned up lingering modal backdrops via DOM cleanup.")
+    except Exception as e:
+        logging.warning(f"DOM backdrop cleanup skipped: {e}")
+
+
 def run_gdv_scrape():
     if not GDV_MEMBER_ID or not GDV_PASSWORD:
         logging.error("GDV credentials missing from environment variables.")
@@ -140,33 +184,31 @@ def run_gdv_scrape():
 
         logging.info(f"Member login successful! Current URL: {page.url}")
 
-        # 2. Target the CONDOS dropdown/section
-        logging.info("Navigating into CONDOS section...")
-        condos_link = page.locator("a:has-text('CONDOS'), a[href*='condo'], a[href*='Condo']").first
+        # 2. Dismiss any post-login modal popups (e.g. "Please verify your contact information")
+        dismiss_modals(page)
 
-        if condos_link.is_visible():
-            condos_link.hover()
-            page.wait_for_timeout(1000)
-
-            # Check if hover revealed a sub-menu link like "Search Condos" or "Availability"
-            sub_link = page.locator("a:has-text('Search'), a:has-text('Availability'), a:has-text('Browse'), a[href*='search']").first
-            if sub_link.is_visible():
-                logging.info("Clicking sub-menu link revealed under CONDOS...")
-                sub_link.click()
-            else:
-                logging.info("Clicking main CONDOS header link...")
-                condos_link.click()
-            page.wait_for_timeout(4000)
-
-        # Direct navigation fallback if still on base members page
-        if "members.aspx" in page.url.lower():
-            logging.info("Attempting direct route fallback to /condos.aspx...")
-            page.goto("https://globaldiscoveryvacations.com/condos.aspx", wait_until="domcontentloaded", timeout=20000)
+        # 3. Direct route to Condos search endpoint extracted from log (condos/Condos.aspx)
+        logging.info("Navigating directly to Condos search endpoint...")
+        try:
+            page.goto("https://globaldiscoveryvacations.com/condos/Condos.aspx", wait_until="domcontentloaded", timeout=30000)
             page.wait_for_timeout(3000)
+        except Exception as e:
+            logging.warning(f"Direct navigation encountered issue: {e}")
+
+        # If direct navigation didn't land, fallback to clicking menu link with force=True
+        if "condos" not in page.url.lower():
+            logging.info("Attempting forced click on CONDOS navigation link...")
+            condos_link = page.locator("a:has-text('CONDOS'), a[href*='Condos.aspx']").first
+            if condos_link.is_visible():
+                condos_link.click(force=True)
+                page.wait_for_timeout(4000)
 
         logging.info(f"Current inventory URL: {page.url}")
 
-        # 3. Trigger Search Form / Grid Load if present
+        # Clear any modal on search page if present
+        dismiss_modals(page)
+
+        # 4. Trigger Search Form / Grid Load if present
         search_triggers = [
             "input[value*='Search']",
             "button:has-text('Search')",
@@ -181,13 +223,13 @@ def run_gdv_scrape():
             if btn.is_visible():
                 logging.info(f"Triggering search button via '{trigger_sel}'...")
                 try:
-                    btn.click()
+                    btn.click(force=True)
                     page.wait_for_timeout(4000)
                 except Exception as e:
                     logging.warning(f"Error triggering search button: {e}")
                 break
 
-        # 4. Scrape Cards / Inventory Rows
+        # 5. Scrape Cards / Inventory Rows
         card_selectors = [
             ".condo-item",
             ".search-result-item",
