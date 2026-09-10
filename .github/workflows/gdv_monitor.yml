@@ -45,5 +45,5 @@ jobs:
               git diff-index --quiet HEAD || git commit -m "Automated update: seen_gdv_weeks.json"
               git push
             else
-              echo "No seen_gdv_weeks.json found to commit."
+              echo "No state file found to commit."
             fi
