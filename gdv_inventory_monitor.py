@@ -101,13 +101,12 @@ def run_gdv_scrape():
 
         # Check if login failed or stayed on login page
         if "login.aspx" in page.url.lower():
-            logging.error("Still on login page after postback. Checking for login error messages...")
-            error_el = page.query_selector(".alert, .error, #ctl00_body_lblError, .text-danger")
-            if error_el:
-                logging.error(f"Login failed message: {error_el.inner_text().strip()}")
+            logging.error("Still on login page after postback. Extracting page content...")
+            # Capture any error messages displayed on the screen
+            page_text = page.locator("body").inner_text()
+            logging.error(f"Page text excerpt: {page_text[:300].strip()}")
+            page.screenshot(path="debug_login_failed.png")
             raise Exception("Authentication failed or page remained on login.aspx. Check GDV_MEMBER_ID and GDV_PASSWORD secrets.")
-
-        logging.info(f"Login successful! Redirected to: {page.url}")
 
         # 2. Navigate to search page
         dest_link = page.query_selector("a:has-text('Destinations'), a[href*='Search'], #ctl00_lbDestinations")
