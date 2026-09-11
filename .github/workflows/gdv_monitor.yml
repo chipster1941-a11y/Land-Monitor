@@ -2,16 +2,16 @@ name: GDV Inventory Monitor
 
 on:
   schedule:
-    # Runs every 6 hours
-    - cron: '0 */6 * * *'
-  workflow_dispatch:
+    # Runs every 30 minutes
+    - cron: '*/30 * * * *'
+  workflow_dispatch: # Allows manual trigger from GitHub UI
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -25,24 +25,18 @@ jobs:
           pip install playwright
           playwright install chromium
 
-      - name: Run GDV Inventory Monitor
+      - name: Run GDV Scraper
         env:
           GDV_MEMBER_ID: ${{ secrets.GDV_MEMBER_ID }}
           GDV_PASSWORD: ${{ secrets.GDV_PASSWORD }}
           EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
           EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
-        run: |
-          python gdv_inventory_monitor.py
+        run: python gdv_inventory_monitor.py
 
-      - name: Commit and push state changes
+      - name: Commit and push updated seen state
         run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action Bot"
-          if [ -f "seen_gdv_weeks.json" ]; then
-            git add seen_gdv_weeks.json
-            git diff-index --quiet HEAD || git commit -m "Automated update: seen_gdv_weeks.json"
-            git push
-          else
-            echo "No state file found to commit."
-          fi
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add seen_gdv_weeks.json
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update GDV seen inventory state" && git push)
