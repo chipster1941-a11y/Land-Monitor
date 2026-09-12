@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import smtplib
+import re
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from playwright.sync_api import sync_playwright
@@ -18,6 +19,7 @@ EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
 
 SEEN_WEEKS_FILE = "seen_gdv_weeks.json"
 TARGET_MONTH_LABEL = "Fall 2027"
+TARGET_YEAR = "2027"  # Ignore listings for the current year (2026)
 
 
 def load_seen_weeks():
@@ -41,11 +43,18 @@ def save_seen_weeks(seen_weeks):
 
 def clean_resort_text(raw_text):
     """Cleans up raw extracted text by removing clutter like 'View Resort' buttons."""
-    # Remove recurring UI button noise
     text = raw_text.replace("View Resort", "").replace("VIEW RESORT", "").strip()
-    # Normalize multiple whitespaces into a single space
     clean = " ".join(text.split())
     return clean
+
+
+def extract_checkin_year(text):
+    """Extracts the check-in year from the listing text (e.g., Check-In: Sat 09/19/26 -> 2026)."""
+    match = re.search(r"Check-In:\s*\w*\s*(\d{2})/(\d{2})/(\d{2})", text, re.IGNORECASE)
+    if match:
+        year_two_digits = match.group(3)
+        return f"20{year_two_digits}"
+    return None
 
 
 def send_email_notification(new_weeks):
@@ -58,7 +67,6 @@ def send_email_notification(new_weeks):
     msg["To"] = EMAIL_RECEIVER
     msg["Subject"] = f"🚨 GDV Inventory Alert: {len(new_weeks)} New Resort Listing(s) Found!"
 
-    # Formatted plain-text email body
     body_text = f"Global Discovery Vacations - New Inventory Alert\n"
     body_text += f"{'=' * 50}\n"
     body_text += f"Target Search Window: {TARGET_MONTH_LABEL}\n"
@@ -178,7 +186,6 @@ def run_gdv_scrape():
                 except Exception as e:
                     logging.warning(f"Error extracting resort card index {i}: {e}")
 
-        # Fallback strategy if ancestor extraction yields nothing
         if not parsed_items:
             fallback_selectors = [
                 ".thumbnail",
@@ -201,6 +208,13 @@ def run_gdv_scrape():
 
         # 4. Evaluate new listings
         for item_text in parsed_items:
+            checkin_year = extract_checkin_year(item_text)
+            
+            # Skip close-in current year availability if we are looking for future travel (2027)
+            if checkin_year and checkin_year != TARGET_YEAR:
+                logging.info(f"Skipping listing with Check-In year {checkin_year}: {item_text[:40]}...")
+                continue
+
             item_id = item_text[:100]
 
             if item_id not in seen_weeks:
@@ -213,11 +227,11 @@ def run_gdv_scrape():
         browser.close()
 
     if new_weeks:
-        logging.info(f"Found {len(new_weeks)} new GDV listings!")
+        logging.info(f"Found {len(new_weeks)} new GDV listings matching criteria!")
         send_email_notification(new_weeks)
         save_seen_weeks(seen_weeks)
     else:
-        logging.info("No new GDV inventory found.")
+        logging.info("No new matching GDV inventory found.")
 
 
 if __name__ == "__main__":
