@@ -133,11 +133,12 @@ def dismiss_modals(page):
 
 
 def filter_by_2027_months(page):
-    """Interacts with the Bootstrap Month dropdown control to load 2027 inventory."""
+    """Interacts with the Bootstrap Month dropdown control to click a 2027 anchor and trigger AJAX update."""
     try:
         logging.info("Attempting to open 'Month' dropdown control...")
-        month_button = page.locator("button, div, a").filter(has_text=re.compile(r"^\s*Month\s*$", re.I)).first
         
+        # Locate the Month dropdown trigger button
+        month_button = page.locator("button, div, a").filter(has_text=re.compile(r"^\s*Month\s*$", re.I)).first
         if month_button.count() == 0:
             month_button = page.locator(":text('Month')").first
 
@@ -145,18 +146,30 @@ def filter_by_2027_months(page):
             month_button.click()
             page.wait_for_timeout(1500)
 
-            # Locate all 2027 items in the dropdown (e.g. "January, 2027", "September, 2027")
-            targets_2027 = page.locator("li, a, div, span").filter(has_text=re.compile(r"2027"))
-            count = targets_2027.count()
-            logging.info(f"Found {count} 2027 month options in dropdown menu.")
+            # Target explicit clickable anchor tags inside the dropdown list containing "2027"
+            target_anchors = page.locator("ul.dropdown-menu a, .dropdown-menu a, a").filter(has_text=re.compile(r"2027"))
+            count = target_anchors.count()
+            logging.info(f"Found {count} 2027 anchor links in dropdown menu.")
 
             if count > 0:
-                # Click the first available 2027 option (or iterate through specific target months)
-                targets_2027.first.click()
-                page.wait_for_timeout(5000)
-                logging.info("Successfully clicked 2027 month filter and waited for AJAX update.")
+                # Pick an anchor (e.g., September, 2027 or first available 2027 option)
+                sep_2027 = target_anchors.filter(has_text=re.compile(r"September,\s*2027", re.I))
+                
+                if sep_2027.count() > 0:
+                    chosen_link = sep_2027.first
+                    logging.info("Selected 'September, 2027' option from menu.")
+                else:
+                    chosen_link = target_anchors.first
+                    logging.info("Selected first available 2027 option from menu.")
+
+                # Force click on the anchor tag
+                chosen_link.click(force=True)
+                
+                # Allow network/AJAX request to process and refresh the DOM cards
+                page.wait_for_timeout(6000)
+                logging.info("Clicked 2027 month filter link and waited for DOM update.")
             else:
-                logging.warning("Opened Month dropdown but found no items containing '2027'.")
+                logging.warning("Opened Month dropdown but found no anchor tags containing '2027'.")
         else:
             logging.warning("Could not find the 'Month' dropdown trigger button.")
     except Exception as e:
