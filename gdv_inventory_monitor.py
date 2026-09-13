@@ -18,18 +18,26 @@ EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
 
 SEEN_WEEKS_FILE = "seen_gdv_weeks.json"
-TARGET_MONTH_LABEL = "Fall 2027 / Priority Florida Regions"
+TARGET_MONTH_LABEL = "All 2027 / Priority Florida Regions"
 TARGET_YEAR = "2027"
 
-# Priority keywords that bypass date restrictions
+# Expanded Priority keywords that bypass date restrictions
 PRIORITY_LOCATIONS = [
+    # Florida Keys
     "florida keys",
     "key west",
     "key largo",
     "marathon",
     "islamorada",
+    "big pine key",
+    # Gulf Coast / Southwest Florida
     "sanibel",
-    "captiva"
+    "captiva",
+    "marco island",
+    "naples",
+    "fort myers beach",
+    "bonita springs",
+    "estero"
 ]
 
 
@@ -124,6 +132,37 @@ def dismiss_modals(page):
         pass
 
 
+def filter_by_2027_months(page):
+    """Interacts with the Bootstrap Month dropdown control to load 2027 inventory."""
+    try:
+        logging.info("Attempting to open 'Month' dropdown control...")
+        month_button = page.locator("button, div, a").filter(has_text=re.compile(r"^\s*Month\s*$", re.I)).first
+        
+        if month_button.count() == 0:
+            month_button = page.locator(":text('Month')").first
+
+        if month_button.count() > 0:
+            month_button.click()
+            page.wait_for_timeout(1500)
+
+            # Locate all 2027 items in the dropdown (e.g. "January, 2027", "September, 2027")
+            targets_2027 = page.locator("li, a, div, span").filter(has_text=re.compile(r"2027"))
+            count = targets_2027.count()
+            logging.info(f"Found {count} 2027 month options in dropdown menu.")
+
+            if count > 0:
+                # Click the first available 2027 option (or iterate through specific target months)
+                targets_2027.first.click()
+                page.wait_for_timeout(5000)
+                logging.info("Successfully clicked 2027 month filter and waited for AJAX update.")
+            else:
+                logging.warning("Opened Month dropdown but found no items containing '2027'.")
+        else:
+            logging.warning("Could not find the 'Month' dropdown trigger button.")
+    except Exception as e:
+        logging.error(f"Error while interacting with Month filter: {e}")
+
+
 def run_gdv_scrape():
     if not GDV_MEMBER_ID or not GDV_PASSWORD:
         logging.error("GDV credentials missing from environment variables.")
@@ -180,7 +219,11 @@ def run_gdv_scrape():
         page.wait_for_timeout(6000)
         dismiss_modals(page)
 
-        # 3. Locate elements based on 'View Resort' action buttons
+        # 3. Trigger 2027 Month Filter
+        filter_by_2027_months(page)
+        dismiss_modals(page)
+
+        # 4. Locate elements based on 'View Resort' action buttons
         logging.info("Searching for resort containers via 'View Resort' action links...")
         
         view_resort_links = page.locator("a:has-text('View Resort')")
@@ -224,7 +267,7 @@ def run_gdv_scrape():
 
         logging.info(f"Successfully extracted {len(parsed_items)} resort listing cards.")
 
-        # 4. Evaluate new listings with conditional location checks
+        # 5. Evaluate new listings with conditional location checks
         for item_text in parsed_items:
             checkin_year = extract_checkin_year(item_text)
             has_priority_loc = is_priority_location(item_text)
