@@ -18,8 +18,19 @@ EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
 
 SEEN_WEEKS_FILE = "seen_gdv_weeks.json"
-TARGET_MONTH_LABEL = "Fall 2027"
-TARGET_YEAR = "2027"  # Ignore listings for the current year (2026)
+TARGET_MONTH_LABEL = "Fall 2027 / Priority Florida Regions"
+TARGET_YEAR = "2027"
+
+# Priority keywords that bypass date restrictions
+PRIORITY_LOCATIONS = [
+    "florida keys",
+    "key west",
+    "key largo",
+    "marathon",
+    "islamorada",
+    "sanibel",
+    "captiva"
+]
 
 
 def load_seen_weeks():
@@ -57,6 +68,12 @@ def extract_checkin_year(text):
     return None
 
 
+def is_priority_location(text):
+    """Checks if the listing matches any high-value location keywords."""
+    lower_text = text.lower()
+    return any(loc in lower_text for loc in PRIORITY_LOCATIONS)
+
+
 def send_email_notification(new_weeks):
     if not EMAIL_SENDER or not EMAIL_PASSWORD or not EMAIL_RECEIVER:
         logging.warning("Email credentials not fully set. Skipping email alert.")
@@ -69,11 +86,12 @@ def send_email_notification(new_weeks):
 
     body_text = f"Global Discovery Vacations - New Inventory Alert\n"
     body_text += f"{'=' * 50}\n"
-    body_text += f"Target Search Window: {TARGET_MONTH_LABEL}\n"
+    body_text += f"Filter Mode: {TARGET_MONTH_LABEL}\n"
     body_text += f"Total New Listings Found: {len(new_weeks)}\n\n"
     
     for idx, item in enumerate(new_weeks, start=1):
-        body_text += f"{idx}. {item['clean_title']}\n"
+        priority_tag = " [PRIORITY LOCATION MATCH]" if item.get("is_priority") else ""
+        body_text += f"{idx}. {item['clean_title']}{priority_tag}\n"
         body_text += f"   --------------------------------------------------\n"
 
     body_text += f"\nLog into GDV Member Portal to view details: https://globaldiscoveryvacations.com/members.aspx\n"
@@ -206,13 +224,14 @@ def run_gdv_scrape():
 
         logging.info(f"Successfully extracted {len(parsed_items)} resort listing cards.")
 
-        # 4. Evaluate new listings
+        # 4. Evaluate new listings with conditional location checks
         for item_text in parsed_items:
             checkin_year = extract_checkin_year(item_text)
-            
-            # Skip close-in current year availability if we are looking for future travel (2027)
-            if checkin_year and checkin_year != TARGET_YEAR:
-                logging.info(f"Skipping listing with Check-In year {checkin_year}: {item_text[:40]}...")
+            has_priority_loc = is_priority_location(item_text)
+
+            # Keep if it matches priority locations OR if it matches 2027 check-in year
+            if not has_priority_loc and checkin_year and checkin_year != TARGET_YEAR:
+                logging.info(f"Skipping non-priority listing with Check-In year {checkin_year}: {item_text[:40]}...")
                 continue
 
             item_id = item_text[:100]
@@ -221,7 +240,8 @@ def run_gdv_scrape():
                 seen_weeks.add(item_id)
                 new_weeks.append({
                     "clean_title": item_text,
-                    "dates": TARGET_MONTH_LABEL
+                    "dates": TARGET_MONTH_LABEL,
+                    "is_priority": has_priority_loc
                 })
 
         browser.close()
