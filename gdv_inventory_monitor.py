@@ -18,7 +18,7 @@ EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
 
 SEEN_WEEKS_FILE = "seen_gdv_weeks.json"
-TARGET_MONTH_LABEL = "All 2027 / Priority Florida Regions"
+TARGET_MONTH_LABEL = "September 2027 / Priority Florida Regions (US Only)"
 TARGET_YEAR = "2027"
 
 # Expanded Priority keywords that bypass date restrictions
@@ -38,6 +38,38 @@ PRIORITY_LOCATIONS = [
     "fort myers beach",
     "bonita springs",
     "estero"
+]
+
+# Non-US keywords to explicitly exclude
+NON_US_KEYWORDS = [
+    "dominican republic",
+    "puerto plata",
+    "punta cana",
+    "mexico",
+    "cancun",
+    "cabo",
+    "cozumel",
+    "playa del carmen",
+    "aruba",
+    "bahamas",
+    "jamaica",
+    "sint maarten",
+    "st. maarten",
+    "costa rica",
+    "belize",
+    "canada",
+    "barbados"
+]
+
+# US State abbreviations/names commonly found in listing addresses
+US_STATE_PATTERNS = [
+    r",\s*AL\b", r",\s*AK\b", r",\s*AZ\b", r",\s*AR\b", r",\s*CA\b", r",\s*CO\b", r",\s*CT\b", r",\s*DE\b",
+    r",\s*FL\b", r",\s*GA\b", r",\s*HI\b", r",\s*ID\b", r",\s*IL\b", r",\s*IN\b", r",\s*IA\b", r",\s*KS\b",
+    r",\s*KY\b", r",\s*LA\b", r",\s*ME\b", r",\s*MD\b", r",\s*MA\b", r",\s*MI\b", r",\s*MN\b", r",\s*MS\b",
+    r",\s*MO\b", r",\s*MT\b", r",\s*NE\b", r",\s*NV\b", r",\s*NH\b", r",\s*NJ\b", r",\s*NM\b", r",\s*NY\b",
+    r",\s*NC\b", r",\s*ND\b", r",\s*OH\b", r",\s*OK\b", r",\s*OR\b", r",\s*PA\b", r",\s*RI\b", r",\s*SC\b",
+    r",\s*SD\b", r",\s*TN\b", r",\s*TX\b", r",\s*UT\b", r",\s*VT\b", r",\s*VA\b", r",\s*WA\b", r",\s*WV\b",
+    r",\s*WI\b", r",\s*WY\b", r"\bUSA\b", r"\bUnited States\b"
 ]
 
 
@@ -82,6 +114,26 @@ def is_priority_location(text):
     return any(loc in lower_text for loc in PRIORITY_LOCATIONS)
 
 
+def is_us_location(text):
+    """Returns True if the listing appears to be in the US and not in international destinations."""
+    lower_text = text.lower()
+    
+    # Exclude explicitly non-US destinations
+    if any(keyword in lower_text for keyword in NON_US_KEYWORDS):
+        return False
+        
+    # Check if text contains a priority Florida location or a US state pattern
+    if is_priority_location(text):
+        return True
+        
+    for pattern in US_STATE_PATTERNS:
+        if re.search(pattern, text, re.IGNORECASE):
+            return True
+            
+    # Default to True if no explicit non-US indicator was found
+    return True
+
+
 def send_email_notification(new_weeks):
     if not EMAIL_SENDER or not EMAIL_PASSWORD or not EMAIL_RECEIVER:
         logging.warning("Email credentials not fully set. Skipping email alert.")
@@ -90,7 +142,7 @@ def send_email_notification(new_weeks):
     msg = MIMEMultipart()
     msg["From"] = EMAIL_SENDER
     msg["To"] = EMAIL_RECEIVER
-    msg["Subject"] = f"🚨 GDV Inventory Alert: {len(new_weeks)} New Resort Listing(s) Found!"
+    msg["Subject"] = f"🚨 GDV Inventory Alert: {len(new_weeks)} New US Resort Listing(s) Found!"
 
     body_text = f"Global Discovery Vacations - New Inventory Alert\n"
     body_text += f"{'=' * 50}\n"
@@ -137,7 +189,6 @@ def filter_by_2027_months(page):
     try:
         logging.info("Attempting to open 'Month' dropdown control...")
         
-        # Locate the Month dropdown trigger button
         month_button = page.locator("button, div, a").filter(has_text=re.compile(r"^\s*Month\s*$", re.I)).first
         if month_button.count() == 0:
             month_button = page.locator(":text('Month')").first
@@ -146,13 +197,11 @@ def filter_by_2027_months(page):
             month_button.click()
             page.wait_for_timeout(1500)
 
-            # Target explicit clickable anchor tags inside the dropdown list containing "2027"
             target_anchors = page.locator("ul.dropdown-menu a, .dropdown-menu a, a").filter(has_text=re.compile(r"2027"))
             count = target_anchors.count()
             logging.info(f"Found {count} 2027 anchor links in dropdown menu.")
 
             if count > 0:
-                # Pick an anchor (e.g., September, 2027 or first available 2027 option)
                 sep_2027 = target_anchors.filter(has_text=re.compile(r"September,\s*2027", re.I))
                 
                 if sep_2027.count() > 0:
@@ -162,10 +211,7 @@ def filter_by_2027_months(page):
                     chosen_link = target_anchors.first
                     logging.info("Selected first available 2027 option from menu.")
 
-                # Force click on the anchor tag
                 chosen_link.click(force=True)
-                
-                # Allow network/AJAX request to process and refresh the DOM cards
                 page.wait_for_timeout(6000)
                 logging.info("Clicked 2027 month filter link and waited for DOM update.")
             else:
@@ -280,8 +326,13 @@ def run_gdv_scrape():
 
         logging.info(f"Successfully extracted {len(parsed_items)} resort listing cards.")
 
-        # 5. Evaluate new listings with conditional location checks
+        # 5. Evaluate new listings with conditional location & US checks
         for item_text in parsed_items:
+            # Check US-only requirement
+            if not is_us_location(item_text):
+                logging.info(f"Skipping non-US listing: {item_text[:40]}...")
+                continue
+
             checkin_year = extract_checkin_year(item_text)
             has_priority_loc = is_priority_location(item_text)
 
