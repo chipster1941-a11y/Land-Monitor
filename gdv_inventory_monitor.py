@@ -61,16 +61,32 @@ NON_US_KEYWORDS = [
     "barbados"
 ]
 
-# Comprehensive US location patterns (handles missing commas and full state names)
+# Comprehensive US location patterns with wildcard/fuzzy state and sub-region support
 US_STATE_PATTERNS = [
-    r"\bNC\b", r"north carolina", r"\bFL\b", r"florida", r"\bSC\b", r"south carolina",
-    r"\bVA\b", r"virginia", r"\bTN\b", r"tennessee", r"\bGA\b", r"georgia",
-    r",\s*AL\b", r",\s*AK\b", r",\s*AZ\b", r",\s*AR\b", r",\s*CA\b", r",\s*CO\b", r",\s*CT\b", r",\s*DE\b",
-    r",\s*HI\b", r",\s*ID\b", r",\s*IL\b", r",\s*IN\b", r",\s*IA\b", r",\s*KS\b", r",\s*KY\b", r",\s*LA\b",
-    r",\s*ME\b", r",\s*MD\b", r",\s*MA\b", r",\s*MI\b", r",\s*MN\b", r",\s*MS\b", r",\s*MO\b", r",\s*MT\b",
-    r",\s*NE\b", r",\s*NV\b", r",\s*NH\b", r",\s*NJ\b", r",\s*NM\b", r",\s*NY\b", r",\s*ND\b", r",\s*OH\b",
-    r",\s*OK\b", r",\s*OR\b", r",\s*PA\b", r",\s*RI\b", r",\s*SD\b", r",\s*TX\b", r",\s*UT\b", r",\s*VT\b",
-    r",\s*WA\b", r",\s*WV\b", r",\s*WI\b", r",\s*WY\b", r"\bUSA\b", r"\bUnited States\b"
+    # Wildcard state matches (matches "North Carolina", "North Carolina - Coast", "North Carolina - Mountain", etc.)
+    r"north\s+carolina.*",
+    r"south\s+carolina.*",
+    r"virginia.*",
+    r"florida.*",
+    r"georgia.*",
+    r"tennessee.*",
+    
+    # Generic state sub-region pattern (matches "State Name - SubRegion")
+    r"[A-Za-z\s]+-\s*[A-Za-z\s]+",
+    
+    # Standalone 2-letter state codes and full names
+    r"NC", r"FL", r"SC", r"VA", r"TN", r"GA",
+    r"MA", r"massachusetts", r"NH", r"new hampshire", r"MO", r"missouri",
+    r"OR", r"oregon", r"ID", r"idaho", r"IN", r"indiana",
+    
+    # Standard comma-separated state abbreviations (e.g. "Outer Banks, NC")
+    r",\s*AL", r",\s*AK", r",\s*AZ", r",\s*AR", r",\s*CA", r",\s*CO", r",\s*CT", r",\s*DE",
+    r",\s*FL", r",\s*GA", r",\s*HI", r",\s*ID", r",\s*IL", r",\s*IN", r",\s*IA", r",\s*KS",
+    r",\s*KY", r",\s*LA", r",\s*ME", r",\s*MD", r",\s*MA", r",\s*MI", r",\s*MN", r",\s*MS",
+    r",\s*MO", r",\s*MT", r",\s*NE", r",\s*NV", r",\s*NH", r",\s*NJ", r",\s*NM", r",\s*NY",
+    r",\s*NC", r",\s*ND", r",\s*OH", r",\s*OK", r",\s*OR", r",\s*PA", r",\s*RI", r",\s*SC",
+    r",\s*SD", r",\s*TN", r",\s*TX", r",\s*UT", r",\s*VT", r",\s*VA", r",\s*WA", r",\s*WV",
+    r",\s*WI", r",\s*WY", r"USA", r"United States"
 ]
 
 
@@ -145,17 +161,26 @@ def send_email_notification(new_weeks):
     msg["To"] = EMAIL_RECEIVER
     msg["Subject"] = f"🚨 GDV Inventory Alert: {len(new_weeks)} New US Resort Listing(s) Found!"
 
-    body_text = f"Global Discovery Vacations - New Inventory Alert\n"
-    body_text += f"{'=' * 50}\n"
-    body_text += f"Filter Mode: {TARGET_MONTH_LABEL}\n"
-    body_text += f"Total New Listings Found: {len(new_weeks)}\n\n"
+    body_text = f"Global Discovery Vacations - New Inventory Alert
+"
+    body_text += f"{'=' * 50}
+"
+    body_text += f"Filter Mode: {TARGET_MONTH_LABEL}
+"
+    body_text += f"Total New Listings Found: {len(new_weeks)}
+
+"
     
     for idx, item in enumerate(new_weeks, start=1):
         priority_tag = " [PRIORITY LOCATION MATCH]" if item.get("is_priority") else ""
-        body_text += f"{idx}. {item['clean_title']}{priority_tag}\n"
-        body_text += f"   --------------------------------------------------\n"
+        body_text += f"{idx}. {item['clean_title']}{priority_tag}
+"
+        body_text += f"   --------------------------------------------------
+"
 
-    body_text += f"\nLog into GDV Member Portal to view details: https://globaldiscoveryvacations.com/members.aspx\n"
+    body_text += f"
+Log into GDV Member Portal to view details: https://globaldiscoveryvacations.com/members.aspx
+"
 
     msg.attach(MIMEText(body_text, "plain"))
 
@@ -281,8 +306,8 @@ def run_gdv_scrape():
         logging.info("Navigating to GDV Member Portal...")
         page.goto("https://globaldiscoveryvacations.com/login.aspx", wait_until="networkidle", timeout=60000)
 
-        clean_member_id = GDV_MEMBER_ID.strip().strip("'\"") if GDV_MEMBER_ID else ""
-        clean_password = GDV_PASSWORD.strip().strip("'\"") if GDV_PASSWORD else ""
+        clean_member_id = GDV_MEMBER_ID.strip().strip("'"") if GDV_MEMBER_ID else ""
+        clean_password = GDV_PASSWORD.strip().strip("'"") if GDV_PASSWORD else ""
 
         page.wait_for_timeout(3000)
 
