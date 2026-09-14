@@ -21,7 +21,7 @@ SEEN_WEEKS_FILE = "seen_gdv_weeks.json"
 TARGET_MONTH_LABEL = "September 2027 / Priority Florida Regions (US Only)"
 TARGET_YEAR = "2027"
 
-# Expanded Priority keywords that bypass date restrictions
+# Expanded Priority keywords that bypass date restrictions (2026 or 2027)
 PRIORITY_LOCATIONS = [
     # Florida Keys
     "florida keys",
@@ -61,15 +61,16 @@ NON_US_KEYWORDS = [
     "barbados"
 ]
 
-# US State abbreviations/names commonly found in listing addresses
+# Comprehensive US location patterns (handles missing commas and full state names)
 US_STATE_PATTERNS = [
+    r"\bNC\b", r"north carolina", r"\bFL\b", r"florida", r"\bSC\b", r"south carolina",
+    r"\bVA\b", r"virginia", r"\bTN\b", r"tennessee", r"\bGA\b", r"georgia",
     r",\s*AL\b", r",\s*AK\b", r",\s*AZ\b", r",\s*AR\b", r",\s*CA\b", r",\s*CO\b", r",\s*CT\b", r",\s*DE\b",
-    r",\s*FL\b", r",\s*GA\b", r",\s*HI\b", r",\s*ID\b", r",\s*IL\b", r",\s*IN\b", r",\s*IA\b", r",\s*KS\b",
-    r",\s*KY\b", r",\s*LA\b", r",\s*ME\b", r",\s*MD\b", r",\s*MA\b", r",\s*MI\b", r",\s*MN\b", r",\s*MS\b",
-    r",\s*MO\b", r",\s*MT\b", r",\s*NE\b", r",\s*NV\b", r",\s*NH\b", r",\s*NJ\b", r",\s*NM\b", r",\s*NY\b",
-    r",\s*NC\b", r",\s*ND\b", r",\s*OH\b", r",\s*OK\b", r",\s*OR\b", r",\s*PA\b", r",\s*RI\b", r",\s*SC\b",
-    r",\s*SD\b", r",\s*TN\b", r",\s*TX\b", r",\s*UT\b", r",\s*VT\b", r",\s*VA\b", r",\s*WA\b", r",\s*WV\b",
-    r",\s*WI\b", r",\s*WY\b", r"\bUSA\b", r"\bUnited States\b"
+    r",\s*HI\b", r",\s*ID\b", r",\s*IL\b", r",\s*IN\b", r",\s*IA\b", r",\s*KS\b", r",\s*KY\b", r",\s*LA\b",
+    r",\s*ME\b", r",\s*MD\b", r",\s*MA\b", r",\s*MI\b", r",\s*MN\b", r",\s*MS\b", r",\s*MO\b", r",\s*MT\b",
+    r",\s*NE\b", r",\s*NV\b", r",\s*NH\b", r",\s*NJ\b", r",\s*NM\b", r",\s*NY\b", r",\s*ND\b", r",\s*OH\b",
+    r",\s*OK\b", r",\s*OR\b", r",\s*PA\b", r",\s*RI\b", r",\s*SD\b", r",\s*TX\b", r",\s*UT\b", r",\s*VT\b",
+    r",\s*WA\b", r",\s*WV\b", r",\s*WI\b", r",\s*WY\b", r"\bUSA\b", r"\bUnited States\b"
 ]
 
 
@@ -109,7 +110,7 @@ def extract_checkin_year(text):
 
 
 def is_priority_location(text):
-    """Checks if the listing matches any high-value location keywords."""
+    """Checks if the listing matches any high-value priority Florida location keywords."""
     lower_text = text.lower()
     return any(loc in lower_text for loc in PRIORITY_LOCATIONS)
 
