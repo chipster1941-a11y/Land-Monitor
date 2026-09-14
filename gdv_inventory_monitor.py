@@ -21,7 +21,7 @@ SEEN_WEEKS_FILE = "seen_gdv_weeks.json"
 TARGET_MONTH_LABEL = "September 2027 / Priority Florida Regions (US Only)"
 TARGET_YEAR = "2027"
 
-# Expanded Priority keywords that bypass date restrictions (2026 or 2027)
+# Priority keywords that bypass date restrictions (2026 or 2027)
 PRIORITY_LOCATIONS = [
     # Florida Keys
     "florida keys",
@@ -223,6 +223,47 @@ def filter_by_2027_months(page):
         logging.error(f"Error while interacting with Month filter: {e}")
 
 
+def extract_all_pages_inventory(page):
+    """Iterates through result pagination pages to collect all listing cards."""
+    all_parsed_items = []
+    page_num = 1
+    max_pages = 5  # Limits pagination scanning up to 5 pages
+
+    while page_num <= max_pages:
+        logging.info(f"Extracting resort cards from Page {page_num}...")
+        
+        view_resort_links = page.locator("a:has-text('View Resort')")
+        link_count = view_resort_links.count()
+
+        if link_count > 0:
+            for i in range(link_count):
+                try:
+                    container = view_resort_links.nth(i).locator("xpath=ancestor::div[contains(@class, 'col-') or contains(@class, 'card') or contains(@class, 'item') or contains(@class, 'resort')][1]")
+                    if container.count() == 0:
+                        container = view_resort_links.nth(i).locator("xpath=..")
+
+                    card_text = container.inner_text().strip()
+                    cleaned = clean_resort_text(card_text)
+                    if len(cleaned) > 10 and cleaned not in all_parsed_items:
+                        all_parsed_items.append(cleaned)
+                except Exception as e:
+                    logging.warning(f"Error extracting card on page {page_num}: {e}")
+
+        # Look for pagination controls (Next / >)
+        next_button = page.locator("a:has-text('Next'), .pagination a:has-text('>'), li.next a, a[aria-label='Next']").first
+        if next_button.count() > 0 and next_button.is_visible():
+            logging.info(f"Clicking Next page control (Page {page_num + 1})...")
+            next_button.click(force=True)
+            page.wait_for_timeout(5000)
+            dismiss_modals(page)
+            page_num += 1
+        else:
+            logging.info(f"No further pagination pages found after Page {page_num}.")
+            break
+
+    return all_parsed_items
+
+
 def run_gdv_scrape():
     if not GDV_MEMBER_ID or not GDV_PASSWORD:
         logging.error("GDV credentials missing from environment variables.")
@@ -283,49 +324,9 @@ def run_gdv_scrape():
         filter_by_2027_months(page)
         dismiss_modals(page)
 
-        # 4. Locate elements based on 'View Resort' action buttons
-        logging.info("Searching for resort containers via 'View Resort' action links...")
-        
-        view_resort_links = page.locator("a:has-text('View Resort')")
-        link_count = view_resort_links.count()
-        logging.info(f"Found {link_count} 'View Resort' listing triggers on page.")
-
-        parsed_items = []
-
-        if link_count > 0:
-            for i in range(link_count):
-                try:
-                    container = view_resort_links.nth(i).locator("xpath=ancestor::div[contains(@class, 'col-') or contains(@class, 'card') or contains(@class, 'item') or contains(@class, 'resort')][1]")
-                    
-                    if container.count() == 0:
-                        container = view_resort_links.nth(i).locator("xpath=..")
-
-                    card_text = container.inner_text().strip()
-                    cleaned = clean_resort_text(card_text)
-                    if len(cleaned) > 10:
-                        parsed_items.append(cleaned)
-                except Exception as e:
-                    logging.warning(f"Error extracting resort card index {i}: {e}")
-
-        if not parsed_items:
-            fallback_selectors = [
-                ".thumbnail",
-                ".caption",
-                "div[class*='resort']",
-                "div[class*='condo']",
-                ".panel-body"
-            ]
-            for selector in fallback_selectors:
-                loc = page.locator(selector)
-                if loc.count() > 0:
-                    for j in range(loc.count()):
-                        txt = clean_resort_text(loc.nth(j).inner_text())
-                        if len(txt) > 15:
-                            parsed_items.append(txt)
-                    if parsed_items:
-                        break
-
-        logging.info(f"Successfully extracted {len(parsed_items)} resort listing cards.")
+        # 4. Extract listings across all available pages
+        parsed_items = extract_all_pages_inventory(page)
+        logging.info(f"Successfully extracted {len(parsed_items)} total resort listing cards across pagination.")
 
         # 5. Evaluate new listings with conditional location & US checks
         for item_text in parsed_items:
