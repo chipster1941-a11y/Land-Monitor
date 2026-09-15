@@ -21,80 +21,28 @@ SEEN_WEEKS_FILE = "seen_gdv_weeks.json"
 TARGET_MONTH_LABEL = "Jan/Feb 2027 & Priority FL Regions (US Only)"
 TARGET_YEAR = "2027"
 
-# Priority keywords that bypass strict date restrictions
 PRIORITY_LOCATIONS = [
     # Florida Keys
-    "florida keys",
-    "key west",
-    "key largo",
-    "marathon",
-    "islamorada",
-    "big pine key",
+    "florida keys", "key west", "key largo", "marathon", "islamorada", "big pine key",
     # Gulf Coast / Southwest Florida
-    "sanibel",
-    "captiva",
-    "marco island",
-    "naples",
-    "fort myers beach",
-    "bonita springs",
-    "estero",
+    "sanibel", "captiva", "marco island", "naples", "fort myers beach", "bonita springs", "estero",
     # Southeast Florida / Miami Metro Area
-    "miami",
-    "miami beach",
-    "south beach",
-    "fort lauderdale",
-    "ft. lauderdale",
-    "pompano beach",
-    "hollywood",
-    "boca raton",
-    "delray beach",
-    "west palm beach",
-    "sunny isles",
-    "key biscayne"
+    "miami", "miami beach", "south beach", "fort lauderdale", "ft. lauderdale", "pompano beach",
+    "hollywood", "boca raton", "delray beach", "west palm beach", "sunny isles", "key biscayne"
 ]
 
-# Non-US keywords to explicitly exclude
 NON_US_KEYWORDS = [
-    "dominican republic",
-    "puerto plata",
-    "punta cana",
-    "mexico",
-    "cancun",
-    "cabo",
-    "cozumel",
-    "playa del carmen",
-    "aruba",
-    "bahamas",
-    "jamaica",
-    "sint maarten",
-    "st. maarten",
-    "costa rica",
-    "belize",
-    "canada",
-    "barbados"
+    "dominican republic", "puerto plata", "punta cana", "mexico", "cancun", "cabo",
+    "cozumel", "playa del carmen", "aruba", "bahamas", "jamaica", "sint maarten",
+    "st. maarten", "costa rica", "belize", "canada", "barbados"
 ]
 
-# Comprehensive US location patterns
 US_STATE_PATTERNS = [
-    # Wildcard state matches
-    r"\bnorth\s+carolina.*",
-    r"\bsouth\s+carolina.*",
-    r"\bvirginia.*",
-    r"\bflorida.*",
-    r"\bgeorgia.*",
-    r"\btennessee.*",
-    r"\bmichigan.*",
-    r"\bwisconsin.*",
-    
-    # Generic state sub-region pattern (matches "State Name - SubRegion")
-    r"\b[A-Za-z\s]+-\s*[A-Za-z\s]+\b",
-    
-    # Standalone 2-letter state codes and full names
+    r"\bnorth\s+carolina\b", r"\bsouth\s+carolina\b", r"\bvirginia\b", r"\bflorida\b",
+    r"\bgeorgia\b", r"\btennessee\b", r"\bmichigan\b", r"\bwisconsin\b",
     r"\bNC\b", r"\bFL\b", r"\bSC\b", r"\bVA\b", r"\bTN\b", r"\bGA\b",
     r"\bMA\b", r"massachusetts", r"\bNH\b", r"new hampshire", r"\bMO\b", r"missouri",
     r"\bOR\b", r"oregon", r"\bID\b", r"idaho", r"\bIN\b", r"indiana", r"\bMI\b", r"\bWI\b",
-    
-    # Standard comma-separated state abbreviations (e.g. "Outer Banks, NC")
     r",\s*AL\b", r",\s*AK\b", r",\s*AZ\b", r",\s*AR\b", r",\s*CA\b", r",\s*CO\b", r",\s*CT\b", r",\s*DE\b",
     r",\s*FL\b", r",\s*GA\b", r",\s*HI\b", r",\s*ID\b", r",\s*IL\b", r",\s*IN\b", r",\s*IA\b", r",\s*KS\b",
     r",\s*KY\b", r",\s*LA\b", r",\s*ME\b", r",\s*MD\b", r",\s*MA\b", r",\s*MI\b", r",\s*MN\b", r",\s*MS\b",
@@ -132,8 +80,7 @@ def clean_resort_text(raw_text):
 def extract_checkin_year(text):
     match = re.search(r"Check-In:\s*\w*\s*(\d{2})/(\d{2})/(\d{2})", text, re.IGNORECASE)
     if match:
-        year_two_digits = match.group(3)
-        return f"20{year_two_digits}"
+        return f"20{match.group(3)}"
     return None
 
 
@@ -155,7 +102,7 @@ def is_us_location(text):
         if re.search(pattern, text, re.IGNORECASE):
             return True
             
-    return True
+    return False
 
 
 def send_email_notification(new_weeks):
@@ -178,7 +125,7 @@ def send_email_notification(new_weeks):
         body_text += f"{idx}. {item['clean_title']}{priority_tag}\n"
         body_text += f"   --------------------------------------------------\n"
 
-    body_text += f"\nLog into GDV Member Portal to view details: https://globaldiscoveryvacations.com/members.aspx\n"
+    body_text += "\nLog into GDV Member Portal to view details: https://globaldiscoveryvacations.com/members.aspx\n"
 
     msg.attach(MIMEText(body_text, "plain"))
 
@@ -207,28 +154,6 @@ def dismiss_modals(page):
         pass
 
 
-def filter_by_2027_months(page, process_page_callback=None):
-    """Navigates directly through 2027 month endpoints using query parameters."""
-    target_months = [
-        ("January 2027", "https://globaldiscoveryvacations.com/condos/Condos.aspx?m=01/01/2027"),
-        ("February 2027", "https://globaldiscoveryvacations.com/condos/Condos.aspx?m=02/01/2027"),
-    ]
-    
-    for month_name, month_url in target_months:
-        try:
-            logging.info(f"Navigating directly to {month_name} inventory endpoint...")
-            page.goto(month_url, wait_until="networkidle", timeout=30000)
-            page.wait_for_timeout(3000)
-            logging.info(f"Successfully loaded {month_name} page. Current URL: {page.url}")
-
-            # If your main loop extracts/processes right after navigation, trigger it here:
-            if process_page_callback:
-                process_page_callback(page)
-
-        except Exception as e:
-            logging.error(f"Error navigating to {month_name} endpoint: {e}")
-
-
 def extract_all_pages_inventory(page):
     all_parsed_items = []
     page_num = 1
@@ -243,7 +168,9 @@ def extract_all_pages_inventory(page):
         if link_count > 0:
             for i in range(link_count):
                 try:
-                    container = view_resort_links.nth(i).locator("xpath=ancestor::div[contains(@class, 'col-') or contains(@class, 'card') or contains(@class, 'item') or contains(@class, 'resort')][1]")
+                    container = view_resort_links.nth(i).locator(
+                        "xpath=ancestor::div[contains(@class, 'col-') or contains(@class, 'card') or contains(@class, 'item') or contains(@class, 'resort')][1]"
+                    )
                     if container.count() == 0:
                         container = view_resort_links.nth(i).locator("xpath=..")
 
@@ -266,6 +193,32 @@ def extract_all_pages_inventory(page):
             break
 
     return all_parsed_items
+
+
+def process_target_months(page):
+    """Iterates directly through 2027 month endpoints and extracts inventory."""
+    target_months = [
+        ("January 2027", "https://globaldiscoveryvacations.com/condos/Condos.aspx?m=01/01/2027"),
+        ("February 2027", "https://globaldiscoveryvacations.com/condos/Condos.aspx?m=02/01/2027"),
+    ]
+    
+    combined_items = []
+    
+    for month_name, month_url in target_months:
+        try:
+            logging.info(f"Navigating directly to {month_name} inventory endpoint...")
+            page.goto(month_url, wait_until="networkidle", timeout=30000)
+            page.wait_for_timeout(3000)
+            dismiss_modals(page)
+            
+            month_items = extract_all_pages_inventory(page)
+            logging.info(f"Extracted {len(month_items)} items for {month_name}.")
+            combined_items.extend(month_items)
+
+        except Exception as e:
+            logging.error(f"Error executing extraction for {month_name}: {e}")
+
+    return combined_items
 
 
 def run_gdv_scrape():
@@ -318,21 +271,11 @@ def run_gdv_scrape():
         logging.info(f"Member login successful! Current URL: {page.url}")
         dismiss_modals(page)
 
-        # 2. Condos search endpoint
-        logging.info("Navigating to Condos search endpoint...")
-        page.goto("https://globaldiscoveryvacations.com/condos/Condos.aspx", wait_until="networkidle", timeout=30000)
-        page.wait_for_timeout(6000)
-        dismiss_modals(page)
+        # 2. Extract listings across target months
+        parsed_items = process_target_months(page)
+        logging.info(f"Successfully extracted {len(parsed_items)} total resort listing cards across all target months.")
 
-        # 3. Trigger Month Filter
-        filter_by_2027_months(page)
-        dismiss_modals(page)
-
-        # 4. Extract listings
-        parsed_items = extract_all_pages_inventory(page)
-        logging.info(f"Successfully extracted {len(parsed_items)} total resort listing cards across pagination.")
-
-        # 5. Evaluate listings
+        # 3. Evaluate listings
         for item_text in parsed_items:
             if not is_us_location(item_text):
                 logging.info(f"Skipping non-US listing: {item_text[:40]}...")
