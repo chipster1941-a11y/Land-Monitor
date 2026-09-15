@@ -18,10 +18,10 @@ EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
 
 SEEN_WEEKS_FILE = "seen_gdv_weeks.json"
-TARGET_MONTH_LABEL = "September 2027 / Priority Florida Regions (US Only)"
+TARGET_MONTH_LABEL = "Jan/Feb 2027 & Priority FL Regions (US Only)"
 TARGET_YEAR = "2027"
 
-# Priority keywords that bypass date restrictions (2026 or 2027)
+# Priority keywords that bypass strict date restrictions
 PRIORITY_LOCATIONS = [
     # Florida Keys
     "florida keys",
@@ -37,7 +37,20 @@ PRIORITY_LOCATIONS = [
     "naples",
     "fort myers beach",
     "bonita springs",
-    "estero"
+    "estero",
+    # Southeast Florida / Miami Metro Area
+    "miami",
+    "miami beach",
+    "south beach",
+    "fort lauderdale",
+    "ft. lauderdale",
+    "pompano beach",
+    "hollywood",
+    "boca raton",
+    "delray beach",
+    "west palm beach",
+    "sunny isles",
+    "key biscayne"
 ]
 
 # Non-US keywords to explicitly exclude
@@ -61,15 +74,17 @@ NON_US_KEYWORDS = [
     "barbados"
 ]
 
-# Comprehensive US location patterns with wildcard/fuzzy state and sub-region support
+# Comprehensive US location patterns
 US_STATE_PATTERNS = [
-    # Wildcard state matches (matches "North Carolina", "North Carolina - Coast", "North Carolina - Mountain", etc.)
+    # Wildcard state matches
     r"\bnorth\s+carolina.*",
     r"\bsouth\s+carolina.*",
     r"\bvirginia.*",
     r"\bflorida.*",
     r"\bgeorgia.*",
     r"\btennessee.*",
+    r"\bmichigan.*",
+    r"\bwisconsin.*",
     
     # Generic state sub-region pattern (matches "State Name - SubRegion")
     r"\b[A-Za-z\s]+-\s*[A-Za-z\s]+\b",
@@ -77,7 +92,7 @@ US_STATE_PATTERNS = [
     # Standalone 2-letter state codes and full names
     r"\bNC\b", r"\bFL\b", r"\bSC\b", r"\bVA\b", r"\bTN\b", r"\bGA\b",
     r"\bMA\b", r"massachusetts", r"\bNH\b", r"new hampshire", r"\bMO\b", r"missouri",
-    r"\bOR\b", r"oregon", r"\bID\b", r"idaho", r"\bIN\b", r"indiana",
+    r"\bOR\b", r"oregon", r"\bID\b", r"idaho", r"\bIN\b", r"indiana", r"\bMI\b", r"\bWI\b",
     
     # Standard comma-separated state abbreviations (e.g. "Outer Banks, NC")
     r",\s*AL\b", r",\s*AK\b", r",\s*AZ\b", r",\s*AR\b", r",\s*CA\b", r",\s*CO\b", r",\s*CT\b", r",\s*DE\b",
@@ -110,14 +125,11 @@ def save_seen_weeks(seen_weeks):
 
 
 def clean_resort_text(raw_text):
-    """Cleans up raw extracted text by removing clutter like 'View Resort' buttons."""
     text = raw_text.replace("View Resort", "").replace("VIEW RESORT", "").strip()
-    clean = " ".join(text.split())
-    return clean
+    return " ".join(text.split())
 
 
 def extract_checkin_year(text):
-    """Extracts the check-in year from the listing text (e.g., Check-In: Sat 09/19/26 -> 2026)."""
     match = re.search(r"Check-In:\s*\w*\s*(\d{2})/(\d{2})/(\d{2})", text, re.IGNORECASE)
     if match:
         year_two_digits = match.group(3)
@@ -126,20 +138,16 @@ def extract_checkin_year(text):
 
 
 def is_priority_location(text):
-    """Checks if the listing matches any high-value priority Florida location keywords."""
     lower_text = text.lower()
     return any(loc in lower_text for loc in PRIORITY_LOCATIONS)
 
 
 def is_us_location(text):
-    """Returns True if the listing appears to be in the US and not in international destinations."""
     lower_text = text.lower()
     
-    # Exclude explicitly non-US destinations
     if any(keyword in lower_text for keyword in NON_US_KEYWORDS):
         return False
         
-    # Check if text contains a priority Florida location or a US state pattern
     if is_priority_location(text):
         return True
         
@@ -147,7 +155,6 @@ def is_us_location(text):
         if re.search(pattern, text, re.IGNORECASE):
             return True
             
-    # Default to True if no explicit non-US indicator was found
     return True
 
 
@@ -187,7 +194,6 @@ def send_email_notification(new_weeks):
 
 
 def dismiss_modals(page):
-    """Detects and closes popup modals interrupting navigation."""
     try:
         page.evaluate("""
             () => {
@@ -202,7 +208,7 @@ def dismiss_modals(page):
 
 
 def filter_by_2027_months(page):
-    """Interacts with the Bootstrap Month dropdown control to click a 2027 anchor and trigger AJAX update."""
+    """Interacts with the Month dropdown control to target January/February 2027."""
     try:
         logging.info("Attempting to open 'Month' dropdown control...")
         
@@ -219,11 +225,11 @@ def filter_by_2027_months(page):
             logging.info(f"Found {count} 2027 anchor links in dropdown menu.")
 
             if count > 0:
-                sep_2027 = target_anchors.filter(has_text=re.compile(r"September,\s*2027", re.I))
+                jan_feb_2027 = target_anchors.filter(has_text=re.compile(r"(january|february),\s*2027", re.I))
                 
-                if sep_2027.count() > 0:
-                    chosen_link = sep_2027.first
-                    logging.info("Selected 'September, 2027' option from menu.")
+                if jan_feb_2027.count() > 0:
+                    chosen_link = jan_feb_2027.first
+                    logging.info("Selected 'January/February 2027' option from menu.")
                 else:
                     chosen_link = target_anchors.first
                     logging.info("Selected first available 2027 option from menu.")
@@ -240,10 +246,9 @@ def filter_by_2027_months(page):
 
 
 def extract_all_pages_inventory(page):
-    """Iterates through result pagination pages to collect all listing cards."""
     all_parsed_items = []
     page_num = 1
-    max_pages = 5  # Limits pagination scanning up to 5 pages
+    max_pages = 5
 
     while page_num <= max_pages:
         logging.info(f"Extracting resort cards from Page {page_num}...")
@@ -265,7 +270,6 @@ def extract_all_pages_inventory(page):
                 except Exception as e:
                     logging.warning(f"Error extracting card on page {page_num}: {e}")
 
-        # Look for pagination controls (Next / >)
         next_button = page.locator("a:has-text('Next'), .pagination a:has-text('>'), li.next a, a[aria-label='Next']").first
         if next_button.count() > 0 and next_button.is_visible():
             logging.info(f"Clicking Next page control (Page {page_num + 1})...")
@@ -293,7 +297,7 @@ def run_gdv_scrape():
         context = browser.new_context(viewport={"width": 1280, "height": 800})
         page = context.new_page()
 
-        # 1. Login to Member Portal
+        # 1. Login
         logging.info("Navigating to GDV Member Portal...")
         page.goto("https://globaldiscoveryvacations.com/login.aspx", wait_until="networkidle", timeout=60000)
 
@@ -330,23 +334,22 @@ def run_gdv_scrape():
         logging.info(f"Member login successful! Current URL: {page.url}")
         dismiss_modals(page)
 
-        # 2. Navigate directly to Condos search endpoint
+        # 2. Condos search endpoint
         logging.info("Navigating to Condos search endpoint...")
         page.goto("https://globaldiscoveryvacations.com/condos/Condos.aspx", wait_until="networkidle", timeout=30000)
         page.wait_for_timeout(6000)
         dismiss_modals(page)
 
-        # 3. Trigger 2027 Month Filter
+        # 3. Trigger Month Filter
         filter_by_2027_months(page)
         dismiss_modals(page)
 
-        # 4. Extract listings across all available pages
+        # 4. Extract listings
         parsed_items = extract_all_pages_inventory(page)
         logging.info(f"Successfully extracted {len(parsed_items)} total resort listing cards across pagination.")
 
-        # 5. Evaluate new listings with conditional location & US checks
+        # 5. Evaluate listings
         for item_text in parsed_items:
-            # Check US-only requirement
             if not is_us_location(item_text):
                 logging.info(f"Skipping non-US listing: {item_text[:40]}...")
                 continue
@@ -354,7 +357,6 @@ def run_gdv_scrape():
             checkin_year = extract_checkin_year(item_text)
             has_priority_loc = is_priority_location(item_text)
 
-            # Keep if it matches priority locations OR if it matches 2027 check-in year
             if not has_priority_loc and checkin_year and checkin_year != TARGET_YEAR:
                 logging.info(f"Skipping non-priority listing with Check-In year {checkin_year}: {item_text[:40]}...")
                 continue
