@@ -208,11 +208,11 @@ def dismiss_modals(page):
 
 
 def filter_by_2027_months(page):
-    """Executes the Jan 2027 PostBack script while logging the raw AJAX server payload."""
+    """Triggers the Jan 2027 PostBack redirect and waits for full page re-render."""
     try:
-        logging.info("Attempting to filter by January 2027 and capture AJAX response...")
+        logging.info("Attempting to filter by January 2027 via PostBack redirect...")
 
-        # 1. Open dropdown menu to load elements in DOM
+        # 1. Open dropdown menu to ensure element exists in DOM
         month_btn = page.locator("button, div, a").filter(has_text=re.compile(r"^\s*Month\s*$", re.I)).first
         if month_btn.count() > 0:
             month_btn.click()
@@ -224,31 +224,16 @@ def filter_by_2027_months(page):
             href = jan_link.get_attribute("href") or ""
             js_code = href.replace("javascript:", "")
 
-            # 2. Attach network response listener to capture POST response body
-            def handle_response(response):
-                if "Condos.aspx" in response.url and response.request.method == "POST":
-                    try:
-                        body_text = response.text()
-                        snippet = body_text[:500].replace("\n", " ").replace("\r", " ")
-                        logging.info(f"--- GDV POSTBACK RESPONSE RAW (First 500 chars) ---")
-                        logging.info(f"{snippet}")
-                        
-                        if "2027" in body_text:
-                            logging.info("SUCCESS: '2027' detected in server AJAX response payload!")
-                        else:
-                            logging.warning("WARNING: '2027' NOT found in server AJAX response payload.")
-                    except Exception as err:
-                        logging.error(f"Failed to read AJAX response body: {err}")
+            logging.info(f"Executing redirect script: {js_code}")
 
-            page.on("response", handle_response)
+            # 2. Expect a full page navigation caused by the HTTP 302 redirect
+            with page.expect_navigation(wait_until="domcontentloaded", timeout=20000):
+                page.evaluate(js_code)
 
-            # 3. Execute script and wait for response
-            page.evaluate(js_code)
+            # Wait for any post-redirect rendering/scripts to complete
             page.wait_for_timeout(5000)
+            logging.info(f"Redirect complete! Current URL after PostBack: {page.url}")
 
-            # Remove listener after execution
-            page.remove_listener("response", handle_response)
-            logging.info("Completed January 2027 PostBack and network response inspection.")
         else:
             logging.warning("January 2027 LinkButton not found in DOM.")
 
