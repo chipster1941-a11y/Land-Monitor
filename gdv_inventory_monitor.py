@@ -208,34 +208,44 @@ def dismiss_modals(page):
 
 
 def filter_by_2027_months(page):
-    """Opens the Month dropdown menu and clicks January 2027 to trigger the ASP.NET PostBack."""
+    """Sets ASP.NET WebForms target parameters directly and dispatches submit event for Jan 2027."""
     try:
-        logging.info("Attempting to filter by January 2027...")
+        logging.info("Attempting to filter by January 2027 via Form PostBack...")
 
-        # 1. Open the Month dropdown menu so child links become visible in the DOM
-        month_dropdown = page.locator("button, div, a").filter(has_text=re.compile(r"^\s*Month\s*$", re.I)).first
-        if month_dropdown.count() > 0:
-            logging.info("Opening Month dropdown menu...")
-            month_dropdown.click()
-            page.wait_for_timeout(1000)
+        target_event = "ctl00$cphMemberBody$rpMonth$ctl05$lbMonth"
 
-        # 2. Target the January 2027 LinkButton control directly
-        jan_2027_link = page.locator("a[id$='rpMonth_ctl05_lbMonth']")
+        # 1. Ensure dropdown is open or visible in DOM
+        page.evaluate("""() => {
+            let el = document.querySelector("a[id$='rpMonth_ctl05_lbMonth']");
+            if (el) { el.scrollIntoView(); }
+        }""")
+        page.wait_for_timeout(500)
 
-        if jan_2027_link.count() > 0:
-            logging.info("Clicking January 2027 link...")
-            # Use force=True to bypass visibility checks if the dropdown menu animation lags
-            with page.expect_navigation(wait_until="networkidle", timeout=15000):
-                jan_2027_link.click(force=True)
-            
-            page.wait_for_timeout(3000)
-            logging.info("Successfully clicked January 2027 filter and reloaded page state.")
-        else:
-            logging.warning("January 2027 link not found by ID. Attempting fallback text click...")
-            fallback_link = page.locator("a").filter(has_text=re.compile(r"January,\s*2027", re.I)).first
-            with page.expect_navigation(wait_until="networkidle", timeout=15000):
-                fallback_link.click(force=True)
-            page.wait_for_timeout(3000)
+        # 2. Directly trigger PostBack while waiting for network response
+        with page.expect_navigation(wait_until="networkidle", timeout=15000):
+            page.evaluate(f"""(target) => {{
+                let form = document.forms[0] || document.querySelector('form');
+                if (!form) return;
+
+                let eventTargetInput = form.querySelector('#__EVENTTARGET') || document.getElementById('__EVENTTARGET');
+                if (!eventTargetInput) {{
+                    eventTargetInput = document.createElement('input');
+                    eventTargetInput.type = 'hidden';
+                    eventTargetInput.name = '__EVENTTARGET';
+                    eventTargetInput.id = '__EVENTTARGET';
+                    form.appendChild(eventTargetInput);
+                }}
+                eventTargetInput.value = target;
+
+                if (typeof __doPostBack === 'function') {{
+                    __doPostBack(target, '');
+                }} else {{
+                    form.submit();
+                }}
+            }}""", target_event)
+
+        page.wait_for_timeout(3000)
+        logging.info("Successfully submitted ASP.NET PostBack for January 2027.")
 
     except Exception as e:
         logging.error(f"Error filtering by 2027 month link: {e}")
