@@ -208,44 +208,40 @@ def dismiss_modals(page):
 
 
 def filter_by_2027_months(page):
-    """Sets ASP.NET WebForms target parameters directly and dispatches submit event for Jan 2027."""
+    """Dispatches native click and ensures ASP.NET event targets are initialized."""
     try:
-        logging.info("Attempting to filter by January 2027 via Form PostBack...")
+        logging.info("Attempting to filter by January 2027 via DOM dispatch...")
 
-        target_event = "ctl00$cphMemberBody$rpMonth$ctl05$lbMonth"
-
-        # 1. Ensure dropdown is open or visible in DOM
+        # 1. Expand the Month dropdown menu in the UI
         page.evaluate("""() => {
-            let el = document.querySelector("a[id$='rpMonth_ctl05_lbMonth']");
-            if (el) { el.scrollIntoView(); }
+            let monthBtn = Array.from(document.querySelectorAll('button, a')).find(el => el.textContent.trim().toLowerCase() === 'month');
+            if (monthBtn) monthBtn.click();
         }""")
-        page.wait_for_timeout(500)
+        page.wait_for_timeout(1000)
 
-        # 2. Directly trigger PostBack while waiting for network response
+        # 2. Trigger native click event and form hidden inputs together
         with page.expect_navigation(wait_until="networkidle", timeout=15000):
-            page.evaluate(f"""(target) => {{
-                let form = document.forms[0] || document.querySelector('form');
-                if (!form) return;
+            page.evaluate("""() => {
+                let targetId = "ctl00_cphMemberBody_rpMonth_ctl05_lbMonth";
+                let link = document.getElementById(targetId);
 
-                let eventTargetInput = form.querySelector('#__EVENTTARGET') || document.getElementById('__EVENTTARGET');
-                if (!eventTargetInput) {{
-                    eventTargetInput = document.createElement('input');
-                    eventTargetInput.type = 'hidden';
-                    eventTargetInput.name = '__EVENTTARGET';
-                    eventTargetInput.id = '__EVENTTARGET';
-                    form.appendChild(eventTargetInput);
-                }}
-                eventTargetInput.value = target;
+                if (link) {
+                    // Set form inputs in case PostBack inspects target directly
+                    let eventTarget = document.getElementById('__EVENTTARGET') || document.querySelector("input[name='__EVENTTARGET']");
+                    if (eventTarget) eventTarget.value = "ctl00$cphMemberBody$rpMonth$ctl05$lbMonth";
+                    
+                    let eventArg = document.getElementById('__EVENTARGUMENT') || document.querySelector("input[name='__EVENTARGUMENT']");
+                    if (eventArg) eventArg.value = "";
 
-                if (typeof __doPostBack === 'function') {{
-                    __doPostBack(target, '');
-                }} else {{
-                    form.submit();
-                }}
-            }}""", target_event)
+                    // Dispatch native click event directly on element
+                    link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                } else if (typeof __doPostBack === 'function') {
+                    __doPostBack('ctl00$cphMemberBody$rpMonth$ctl05$lbMonth', '');
+                }
+            }""")
 
         page.wait_for_timeout(3000)
-        logging.info("Successfully submitted ASP.NET PostBack for January 2027.")
+        logging.info("Successfully dispatched PostBack for January 2027.")
 
     except Exception as e:
         logging.error(f"Error filtering by 2027 month link: {e}")
