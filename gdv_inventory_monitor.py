@@ -208,11 +208,11 @@ def dismiss_modals(page):
 
 
 def filter_by_2027_months(page):
-    """Opens the Month menu and triggers the ASP.NET LinkButton via native keyboard interaction."""
+    """Extracts and executes the exact JavaScript href payload attached to the Jan 2027 control."""
     try:
-        logging.info("Attempting to filter by January 2027 via Keyboard focus...")
+        logging.info("Attempting to filter by January 2027 by executing its exact href script...")
 
-        # 1. Click the Month dropdown menu to bring links into active view
+        # 1. Open dropdown menu to ensure element script attributes are rendered
         month_btn = page.locator("button, div, a").filter(has_text=re.compile(r"^\s*Month\s*$", re.I)).first
         if month_btn.count() > 0:
             month_btn.click()
@@ -222,17 +222,23 @@ def filter_by_2027_months(page):
         jan_link = page.locator("a[id$='rpMonth_ctl05_lbMonth']").first
 
         if jan_link.count() > 0:
-            # Focus directly on the element and press Enter to trigger the ASP.NET PostBack natively
-            jan_link.focus()
-            page.wait_for_timeout(300)
-            
-            with page.expect_response(lambda res: res.status == 200, timeout=15000):
-                page.keyboard.press("Enter")
+            # Extract the exact javascript:__doPostBack(...) string from the href
+            href = jan_link.get_attribute("href") or ""
+            logging.info(f"Found January 2027 href: {href}")
 
-            page.wait_for_timeout(4000)
-            logging.info("Successfully sent Enter press to January 2027 control.")
+            if href.startswith("javascript:"):
+                js_code = href.replace("javascript:", "")
+                
+                # Execute the postback script and wait for AJAX network response
+                with page.expect_response(lambda res: "Condos.aspx" in res.url or res.status == 200, timeout=15000):
+                    page.evaluate(js_code)
+
+                page.wait_for_timeout(4000)
+                logging.info("Successfully executed January 2027 PostBack script.")
+            else:
+                logging.warning("January 2027 href does not contain a javascript: statement.")
         else:
-            logging.warning("January 2027 LinkButton control not found in DOM.")
+            logging.warning("January 2027 LinkButton not found in DOM.")
 
     except Exception as e:
         logging.error(f"Error filtering by 2027 month link: {e}")
