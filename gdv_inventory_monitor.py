@@ -194,7 +194,6 @@ def extract_all_pages_inventory(page):
 
     return all_parsed_items
 def select_month_and_search(page, start_date_str):
-    page.pause()
     """
     Fills in the ASP.NET date form, submits the search, 
     and waits for the network to idle before scraping.
@@ -222,28 +221,32 @@ def select_month_and_search(page, start_date_str):
     dismiss_modals(page)
 
 def process_target_months(page):
-    """Navigates to Condos.aspx, populates search form, and extracts results."""
+    """Navigates to Condos.aspx and logs all form controls to find date selector IDs."""
     target_months = [
         ("January 2027", "01/01/2027"),
-        ("February 2027", "02/01/2027"),
     ]
     
     combined_items = []
-    
-    # Base URL for the condo search portal
     condos_url = "https://globaldiscoveryvacations.com/condos/Condos.aspx"
     
     for month_name, start_date in target_months:
         try:
-            logging.info(f"Navigating to condo portal and searching for {month_name} ({start_date})...")
+            logging.info(f"Navigating to condo portal: {condos_url}")
             page.goto(condos_url, wait_until="networkidle", timeout=30000)
             dismiss_modals(page)
-            
-            # Form interaction call
-            select_month_and_search(page, start_date)
+
+            # --- DUMP HTML FOR INSPECTION ---
+            form_elements = page.eval_on_selector_all(
+                "input, select, button",
+                "elements => elements.map(e => ({ tag: e.tagName, id: e.id, name: e.name, type: e.type, class: e.className }))"
+            )
+            logging.info(f"GDV Form Controls Found: {form_elements}")
+            # --------------------------------
+
+            # Temporarily commented out while we inspect the log controls:
+            # select_month_and_search(page, start_date)
             
             month_items = extract_all_pages_inventory(page)
-            logging.info(f"Extracted {len(month_items)} items for {month_name}.")
             combined_items.extend(month_items)
 
         except Exception as e:
@@ -261,7 +264,7 @@ def run_gdv_scrape():
     new_weeks = []
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
+        browser = p.chromium.launch(headless=True)
         context = browser.new_context(viewport={"width": 1280, "height": 800})
         page = context.new_page()
 
