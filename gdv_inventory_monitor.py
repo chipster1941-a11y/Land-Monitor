@@ -208,10 +208,11 @@ def dismiss_modals(page):
 
 
 def filter_by_2027_months(page):
-    """Interacts with the Month dropdown control and forces an ASP.NET PostBack update."""
+    """Interacts with the Month dropdown control and ensures DOM updates via direct click or form submission."""
     try:
-        logging.info("Attempting to open 'Month' dropdown control...")
-        
+        logging.info("Attempting to filter by January/February 2027...")
+
+        # 1. Open the Month dropdown
         month_button = page.locator("button, div, a").filter(has_text=re.compile(r"^\s*Month\s*$", re.I)).first
         if month_button.count() == 0:
             month_button = page.locator(":text('Month')").first
@@ -220,46 +221,42 @@ def filter_by_2027_months(page):
             month_button.click()
             page.wait_for_timeout(1500)
 
+            # 2. Locate target menu link
             target_anchors = page.locator("ul.dropdown-menu a, .dropdown-menu a, a").filter(has_text=re.compile(r"2027"))
-            count = target_anchors.count()
-            logging.info(f"Found {count} 2027 anchor links in dropdown menu.")
+            jan_feb_2027 = target_anchors.filter(has_text=re.compile(r"(january|february),\s*2027", re.I))
 
-            if count > 0:
-                jan_feb_2027 = target_anchors.filter(has_text=re.compile(r"(january|february),\s*2027", re.I))
+            if jan_feb_2027.count() > 0:
+                chosen_link = jan_feb_2027.first
                 
-                if jan_feb_2027.count() > 0:
-                    chosen_link = jan_feb_2027.first
-                    logging.info("Selected 'January/February 2027' option from menu.")
-                else:
-                    chosen_link = target_anchors.first
-                    logging.info("Selected first available 2027 option from menu.")
-
-                # Extract href to check for ASP.NET __doPostBack calls
+                # Check for direct href URL navigation
                 href_attr = chosen_link.get_attribute("href") or ""
-                
-                if "javascript:__doPostBack" in href_attr:
-                    logging.info("Executing native ASP.NET __doPostBack JavaScript call...")
-                    page.evaluate(href_attr.replace("javascript:", ""))
+                if href_attr and not href_attr.startswith("javascript:") and href_attr != "#":
+                    logging.info(f"Navigating directly to month filter URL: {href_attr}")
+                    page.goto(href_attr, wait_until="networkidle")
                 else:
-                    # Hover and physically dispatch mousedown/mouseup to trigger jQuery click events
-                    chosen_link.hover()
-                    page.wait_for_timeout(300)
-                    chosen_link.click(force=True)
+                    # Perform physical mouse click to trigger client-side event listeners
+                    logging.info("Triggering physical click on dropdown option...")
+                    chosen_link.click()
+                    page.wait_for_timeout(2000)
 
-                # Wait for ASP.NET update panel / AJAX response
-                try:
-                    page.wait_for_response(lambda res: res.status == 200, timeout=10000)
-                except Exception:
-                    pass
+                # 3. Check for an explicit Search/Filter/Submit button and click it if present
+                search_btn = page.locator("button, input[type='submit'], input[type='button'], a").filter(
+                    has_text=re.compile(r"^\s*(search|filter|apply|submit|find)\s*$", re.I)
+                ).first
+
+                if search_btn.count() > 0 and search_btn.is_visible():
+                    logging.info("Found Search/Apply button. Submitting filter form...")
+                    search_btn.click()
+                    page.wait_for_load_state("networkidle", timeout=15000)
 
                 page.wait_for_timeout(5000)
-                logging.info("Clicked 2027 month filter link and waited for DOM update.")
+                logging.info("Completed month filter selection and waited for DOM update.")
             else:
-                logging.warning("Opened Month dropdown but found no anchor tags containing '2027'.")
+                logging.warning("Opened Month dropdown but found no Jan/Feb 2027 options.")
         else:
-            logging.warning("Could not find the 'Month' dropdown trigger button.")
+            logging.warning("Could not locate the 'Month' filter dropdown.")
     except Exception as e:
-        logging.error(f"Error while interacting with Month filter: {e}")
+        logging.error(f"Error while applying month filter: {e}")
 
 
 def extract_all_pages_inventory(page):
