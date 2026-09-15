@@ -194,6 +194,7 @@ def extract_all_pages_inventory(page):
 
     return all_parsed_items
 def select_month_and_search(page, start_date_str):
+    page.pause()
     """
     Fills in the ASP.NET date form, submits the search, 
     and waits for the network to idle before scraping.
@@ -260,7 +261,7 @@ def run_gdv_scrape():
     new_weeks = []
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(headless=False)
         context = browser.new_context(viewport={"width": 1280, "height": 800})
         page = context.new_page()
 
