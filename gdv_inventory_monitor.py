@@ -208,7 +208,7 @@ def dismiss_modals(page):
 
 
 def filter_by_2027_months(page):
-    """Interacts with the Month dropdown control to target January/February 2027."""
+    """Interacts with the Month dropdown control to target January/February 2027 and triggers DOM update."""
     try:
         logging.info("Attempting to open 'Month' dropdown control...")
         
@@ -234,8 +234,21 @@ def filter_by_2027_months(page):
                     chosen_link = target_anchors.first
                     logging.info("Selected first available 2027 option from menu.")
 
-                chosen_link.click(force=True)
-                page.wait_for_timeout(6000)
+                # Dispatch standard click via JS execution to force ASP.NET / jQuery handlers
+                element_handle = chosen_link.element_handle()
+                if element_handle:
+                    page.evaluate("(el) => { el.click(); if (el.href && el.href.startsWith('javascript:')) eval(el.href.replace('javascript:', '')); }", element_handle)
+                else:
+                    chosen_link.click(force=True)
+
+                # Check if a Submit/Search button exists to finalize the filter
+                search_btn = page.locator("button, input[type='submit'], a").filter(has_text=re.compile(r"^\s*(search|filter|apply)\s*$", re.I)).first
+                if search_btn.count() > 0 and search_btn.is_visible():
+                    logging.info("Found filter submit button. Clicking to apply...")
+                    search_btn.click()
+
+                page.wait_for_load_state("networkidle", timeout=15000)
+                page.wait_for_timeout(5000)
                 logging.info("Clicked 2027 month filter link and waited for DOM update.")
             else:
                 logging.warning("Opened Month dropdown but found no anchor tags containing '2027'.")
