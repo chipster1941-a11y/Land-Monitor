@@ -208,25 +208,33 @@ def dismiss_modals(page):
 
 
 def filter_by_2027_months(page):
-    """Clicks the January 2027 link button directly to trigger the ASP.NET PostBack correctly."""
+    """Opens the Month dropdown menu and clicks January 2027 to trigger the ASP.NET PostBack."""
     try:
-        logging.info("Attempting to click January 2027 filter link...")
+        logging.info("Attempting to filter by January 2027...")
 
-        # Target the exact LinkButton by its ASP.NET ID ending
+        # 1. Open the Month dropdown menu so child links become visible in the DOM
+        month_dropdown = page.locator("button, div, a").filter(has_text=re.compile(r"^\s*Month\s*$", re.I)).first
+        if month_dropdown.count() > 0:
+            logging.info("Opening Month dropdown menu...")
+            month_dropdown.click()
+            page.wait_for_timeout(1000)
+
+        # 2. Target the January 2027 LinkButton control directly
         jan_2027_link = page.locator("a[id$='rpMonth_ctl05_lbMonth']")
 
         if jan_2027_link.count() > 0:
-            # Click the link natively so Playwright handles the form postback event properly
+            logging.info("Clicking January 2027 link...")
+            # Use force=True to bypass visibility checks if the dropdown menu animation lags
             with page.expect_navigation(wait_until="networkidle", timeout=15000):
-                jan_2027_link.click()
+                jan_2027_link.click(force=True)
             
             page.wait_for_timeout(3000)
             logging.info("Successfully clicked January 2027 filter and reloaded page state.")
         else:
-            # Fallback locator if ID slightly shifts
-            logging.warning("Exact ID locator not found, falling back to text match...")
-            page.locator("a").filter(has_text=re.compile(r"January,\s*2027", re.I)).first.click()
-            page.wait_for_load_state("networkidle", timeout=15000)
+            logging.warning("January 2027 link not found by ID. Attempting fallback text click...")
+            fallback_link = page.locator("a").filter(has_text=re.compile(r"January,\s*2027", re.I)).first
+            with page.expect_navigation(wait_until="networkidle", timeout=15000):
+                fallback_link.click(force=True)
             page.wait_for_timeout(3000)
 
     except Exception as e:
