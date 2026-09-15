@@ -207,21 +207,26 @@ def dismiss_modals(page):
         pass
 
 
-def filter_by_2027_months(page):
-    """Navigates directly to the GDV 2027 month endpoints using query parameters."""
-    try:
-        logging.info("Navigating directly to January 2027 inventory endpoint...")
-        
-        # 1. Direct GET request to January 2027
-        jan_url = "https://globaldiscoveryvacations.com/condos/Condos.aspx?m=01/01/2027"
-        page.goto(jan_url)
-        page.wait_for_load_state("networkidle", timeout=15000)
-        page.wait_for_timeout(3000)
-        
-        logging.info(f"Successfully loaded January 2027 page. Current URL: {page.url}")
+def filter_by_2027_months(page, process_page_callback=None):
+    """Navigates directly through 2027 month endpoints using query parameters."""
+    target_months = [
+        ("January 2027", "https://globaldiscoveryvacations.com/condos/Condos.aspx?m=01/01/2027"),
+        ("February 2027", "https://globaldiscoveryvacations.com/condos/Condos.aspx?m=02/01/2027"),
+    ]
+    
+    for month_name, month_url in target_months:
+        try:
+            logging.info(f"Navigating directly to {month_name} inventory endpoint...")
+            page.goto(month_url, wait_until="networkidle", timeout=30000)
+            page.wait_for_timeout(3000)
+            logging.info(f"Successfully loaded {month_name} page. Current URL: {page.url}")
 
-    except Exception as e:
-        logging.error(f"Error navigating to 2027 month endpoint: {e}")
+            # If your main loop extracts/processes right after navigation, trigger it here:
+            if process_page_callback:
+                process_page_callback(page)
+
+        except Exception as e:
+            logging.error(f"Error navigating to {month_name} endpoint: {e}")
 
 
 def extract_all_pages_inventory(page):
