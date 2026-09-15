@@ -208,37 +208,20 @@ def dismiss_modals(page):
 
 
 def filter_by_2027_months(page):
-    """Triggers the Jan 2027 PostBack redirect and waits for full page re-render."""
+    """Navigates directly to the GDV 2027 month endpoints using query parameters."""
     try:
-        logging.info("Attempting to filter by January 2027 via PostBack redirect...")
-
-        # 1. Open dropdown menu to ensure element exists in DOM
-        month_btn = page.locator("button, div, a").filter(has_text=re.compile(r"^\s*Month\s*$", re.I)).first
-        if month_btn.count() > 0:
-            month_btn.click()
-            page.wait_for_timeout(1000)
-
-        jan_link = page.locator("a[id$='rpMonth_ctl05_lbMonth']").first
-
-        if jan_link.count() > 0:
-            href = jan_link.get_attribute("href") or ""
-            js_code = href.replace("javascript:", "")
-
-            logging.info(f"Executing redirect script: {js_code}")
-
-            # 2. Expect a full page navigation caused by the HTTP 302 redirect
-            with page.expect_navigation(wait_until="domcontentloaded", timeout=20000):
-                page.evaluate(js_code)
-
-            # Wait for any post-redirect rendering/scripts to complete
-            page.wait_for_timeout(5000)
-            logging.info(f"Redirect complete! Current URL after PostBack: {page.url}")
-
-        else:
-            logging.warning("January 2027 LinkButton not found in DOM.")
+        logging.info("Navigating directly to January 2027 inventory endpoint...")
+        
+        # 1. Direct GET request to January 2027
+        jan_url = "https://globaldiscoveryvacations.com/condos/Condos.aspx?m=01/01/2027"
+        page.goto(jan_url)
+        page.wait_for_load_state("networkidle", timeout=15000)
+        page.wait_for_timeout(3000)
+        
+        logging.info(f"Successfully loaded January 2027 page. Current URL: {page.url}")
 
     except Exception as e:
-        logging.error(f"Error filtering by 2027 month link: {e}")
+        logging.error(f"Error navigating to 2027 month endpoint: {e}")
 
 
 def extract_all_pages_inventory(page):
