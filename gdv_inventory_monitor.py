@@ -195,35 +195,32 @@ def extract_all_pages_inventory(page):
     return all_parsed_items
 def select_month_and_search(page, start_date_str):
     """
-    Opens the GDV search filter menu, selects the target date/month, 
-    and submits the ASP.NET filter form.
+    Sets search parameters on GDV's portal and submits the search form.
     """
-    # 1. Load the main Condos search page
     condos_url = "https://globaldiscoveryvacations.com/condos/Condos.aspx"
     page.goto(condos_url, wait_until="networkidle", timeout=30000)
     dismiss_modals(page)
 
     try:
-        # 2. Click the Bootstrap filter/search dropdown button on the page
-        filter_btn = page.locator("button.dropdown-toggle").first
-        if filter_btn.is_visible():
-            filter_btn.click()
-            page.wait_for_timeout(1000)
-
-        # 3. If an input field appears inside the dropdown/modal, fill it
-        date_field = page.locator("input[type='text']:not(.hidden)").first
-        if date_field.is_visible():
-            date_field.fill(start_date_str)
-            date_field.press("Enter")
+        # 1. Look for any visible text input inside open filters or popovers
+        inputs = page.locator("input[type='text']:not([class*='hidden'])")
+        
+        if inputs.count() > 0:
+            first_input = inputs.first
+            first_input.fill(start_date_str)
+            first_input.press("Enter")
+            page.wait_for_load_state("networkidle")
         else:
-            # Fallback: Trigger PostBack directly to submit form filters
-            page.evaluate(f"if (typeof __doPostBack === 'function') {{ __doPostBack('ctl00$cphMemberBody$btnSearch', '{start_date_str}'); }}")
-            
-        page.wait_for_load_state("networkidle")
+            # 2. If no direct text input is visible, trigger ASP.NET submit directly
+            page.evaluate(
+                f"if (typeof __doPostBack === 'function') {{ __doPostBack('ctl00$cphMemberBody$btnSearch', '{start_date_str}'); }}"
+            )
+            page.wait_for_load_state("networkidle")
+
         page.wait_for_timeout(2000)
 
     except Exception as e:
-        logging.warning(f"Filter interaction fallback applied: {e}")
+        logging.warning(f"Filter interaction note: {e}")
 
 
 def process_target_months(page):
@@ -316,7 +313,10 @@ def run_gdv_scrape():
             checkin_year = extract_checkin_year(item_text)
             has_priority_loc = is_priority_location(item_text)
 
-            if not has_priority_loc and checkin_year and checkin_year != TARGET_YEAR:
+            # Allow 2027 or late 2026 (Oct/Nov/Dec)
+            is_allowed_year = (checkin_year == TARGET_YEAR) or (checkin_year == 2026 and checkin_month >= 10)
+
+            if not has_priority_loc and checkin_year and not is_allowed_year:
                 logging.info(f"Skipping non-priority listing with Check-In year {checkin_year}: {item_text[:40]}...")
                 continue
 
