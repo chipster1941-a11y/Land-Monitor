@@ -193,23 +193,53 @@ def extract_all_pages_inventory(page):
             break
 
     return all_parsed_items
+def select_month_and_search(page, start_date_str):
+    """
+    Fills in the ASP.NET date form, submits the search, 
+    and waits for the network to idle before scraping.
+    """
+    # 1. Locate date inputs or dropdowns
+    date_input = page.locator("input[id*='CheckIn'], input[id*='Date'], input[name*='Date']").first
+    
+    if date_input.count() > 0:
+        date_input.click()
+        date_input.fill("")
+        date_input.type(start_date_str, delay=50)
+    
+    # 2. Locate and click Search / Filter submit button
+    search_btn = page.locator("input[type='submit'][value*='Search'], button:has-text('Search'), a:has-text('Search')").first
+    
+    if search_btn.count() > 0:
+        with page.expect_navigation(wait_until="networkidle", timeout=30000):
+            search_btn.click()
+    else:
+        # Fallback if form submits via Enter key
+        with page.expect_navigation(wait_until="networkidle", timeout=30000):
+            date_input.press("Enter")
 
+    page.wait_for_timeout(3000)
+    dismiss_modals(page)
 
 def process_target_months(page):
-    """Iterates directly through 2027 month endpoints and extracts inventory."""
+    """Navigates to Condos.aspx, populates search form, and extracts results."""
     target_months = [
-        ("January 2027", "https://globaldiscoveryvacations.com/condos/Condos.aspx?m=01/01/2027"),
-        ("February 2027", "https://globaldiscoveryvacations.com/condos/Condos.aspx?m=02/01/2027"),
+        ("January 2027", "01/01/2027"),
+        ("February 2027", "02/01/2027"),
     ]
     
     combined_items = []
     
-    for month_name, month_url in target_months:
+    # Base URL for the condo search portal
+    condos_url = "https://globaldiscoveryvacations.com/condos/Condos.aspx"
+    
+    for month_name, start_date in target_months:
         try:
-            logging.info(f"Navigating directly to {month_name} inventory endpoint...")
-            page.goto(month_url, wait_until="networkidle", timeout=30000)
-            page.wait_for_timeout(3000)
+            logging.info(f"Navigating to condo portal and searching for {month_name} ({start_date})...")
+            page.goto(condos_url, wait_until="networkidle", timeout=30000)
             dismiss_modals(page)
+            
+            # Form interaction call
+            select_month_and_search(page, start_date)
             
             month_items = extract_all_pages_inventory(page)
             logging.info(f"Extracted {len(month_items)} items for {month_name}.")
