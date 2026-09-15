@@ -208,27 +208,29 @@ def dismiss_modals(page):
 
 
 def filter_by_2027_months(page):
-    """Triggers ASP.NET PostBack directly for January and February 2027 controls."""
+    """Clicks the January 2027 link button directly to trigger the ASP.NET PostBack correctly."""
     try:
-        logging.info("Attempting to trigger ASP.NET PostBack for Jan/Feb 2027...")
+        logging.info("Attempting to click January 2027 filter link...")
 
-        # 1. First attempt direct client-side execution using exact WebForms target IDs
-        target_ids = [
-            "ctl00$cphMemberBody$rpMonth$ctl05$lbMonth",  # January 2027
-            "ctl00$cphMemberBody$rpMonth$ctl06$lbMonth"   # February 2027
-        ]
+        # Target the exact LinkButton by its ASP.NET ID ending
+        jan_2027_link = page.locator("a[id$='rpMonth_ctl05_lbMonth']")
 
-        # Execute PostBack for January 2027 directly
-        logging.info(f"Invoking __doPostBack for January 2027 ({target_ids[0]})...")
-        page.evaluate(f"__doPostBack('{target_ids[0]}', '');")
-        
-        # Wait for ASP.NET AJAX UpdatePanel to finish response
-        page.wait_for_load_state("networkidle", timeout=15000)
-        page.wait_for_timeout(4000)
-        logging.info("Completed ASP.NET PostBack request for 2027 inventory.")
+        if jan_2027_link.count() > 0:
+            # Click the link natively so Playwright handles the form postback event properly
+            with page.expect_navigation(wait_until="networkidle", timeout=15000):
+                jan_2027_link.click()
+            
+            page.wait_for_timeout(3000)
+            logging.info("Successfully clicked January 2027 filter and reloaded page state.")
+        else:
+            # Fallback locator if ID slightly shifts
+            logging.warning("Exact ID locator not found, falling back to text match...")
+            page.locator("a").filter(has_text=re.compile(r"January,\s*2027", re.I)).first.click()
+            page.wait_for_load_state("networkidle", timeout=15000)
+            page.wait_for_timeout(3000)
 
     except Exception as e:
-        logging.error(f"Error triggering 2027 month PostBack: {e}")
+        logging.error(f"Error filtering by 2027 month link: {e}")
 
 
 def extract_all_pages_inventory(page):
