@@ -195,58 +195,47 @@ def extract_all_pages_inventory(page):
     return all_parsed_items
 def select_month_and_search(page, start_date_str):
     """
-    Fills in the ASP.NET date form, submits the search, 
-    and waits for the network to idle before scraping.
+    Triggers GDV ASP.NET PostBack or URL query parameter with forced navigation,
+    then waits for the updated DOM inventory cards to load.
     """
-    # 1. Locate date inputs or dropdowns
-    date_input = page.locator("input[id*='CheckIn'], input[id*='Date'], input[name*='Date']").first
+    # 1. First attempt: Navigate with explicit query parameter that GDV ASP.NET page reads
+    target_url = f"https://globaldiscoveryvacations.com/condos/Condos.aspx?m={start_date_str}"
     
-    if date_input.count() > 0:
-        date_input.click()
-        date_input.fill("")
-        date_input.type(start_date_str, delay=50)
+    with page.expect_navigation(wait_until="networkidle", timeout=30000):
+        page.goto(target_url)
     
-    # 2. Locate and click Search / Filter submit button
-    search_btn = page.locator("input[type='submit'][value*='Search'], button:has-text('Search'), a:has-text('Search')").first
-    
-    if search_btn.count() > 0:
-        with page.expect_navigation(wait_until="networkidle", timeout=30000):
-            search_btn.click()
-    else:
-        # Fallback if form submits via Enter key
-        with page.expect_navigation(wait_until="networkidle", timeout=30000):
-            date_input.press("Enter")
-
-    page.wait_for_timeout(3000)
     dismiss_modals(page)
+    
+    # 2. Try triggering ASP.NET JavaScript PostBack if available
+    try:
+        page.evaluate(f"if (typeof __doPostBack === 'function') {{ __doPostBack('ctl00$cphMemberBody$btnSearch', '{start_date_str}'); }}")
+        page.wait_for_timeout(3000)
+        page.wait_for_load_state("networkidle")
+    except Exception as e:
+        logging.info(f"PostBack evaluation skipped or handled: {e}")
+
+    page.wait_for_timeout(2000)
+
 
 def process_target_months(page):
-    """Navigates to Condos.aspx and logs all form controls to find date selector IDs."""
+    """Navigates to GDV Condo search, applies target dates, and extracts inventory."""
     target_months = [
         ("January 2027", "01/01/2027"),
+        ("February 2027", "02/01/2027"),
     ]
     
     combined_items = []
-    condos_url = "https://globaldiscoveryvacations.com/condos/Condos.aspx"
     
     for month_name, start_date in target_months:
         try:
-            logging.info(f"Navigating to condo portal: {condos_url}")
-            page.goto(condos_url, wait_until="networkidle", timeout=30000)
-            dismiss_modals(page)
-
-            # --- DUMP HTML FOR INSPECTION ---
-            form_elements = page.eval_on_selector_all(
-                "input, select, button",
-                "elements => elements.map(e => ({ tag: e.tagName, id: e.id, name: e.name, type: e.type, class: e.className }))"
-            )
-            logging.info(f"GDV Form Controls Found: {form_elements}")
-            # --------------------------------
-
-            # Temporarily commented out while we inspect the log controls:
-            # select_month_and_search(page, start_date)
+            logging.info(f"Navigating to condo portal and searching for {month_name} ({start_date})...")
             
+            # Execute search with target date
+            select_month_and_search(page, start_date)
+            
+            # Scrape inventory
             month_items = extract_all_pages_inventory(page)
+            logging.info(f"Extracted {len(month_items)} items for {month_name}.")
             combined_items.extend(month_items)
 
         except Exception as e:
