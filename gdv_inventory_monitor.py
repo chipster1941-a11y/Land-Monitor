@@ -208,55 +208,27 @@ def dismiss_modals(page):
 
 
 def filter_by_2027_months(page):
-    """Interacts with the Month dropdown control and ensures DOM updates via direct click or form submission."""
+    """Triggers ASP.NET PostBack directly for January and February 2027 controls."""
     try:
-        logging.info("Attempting to filter by January/February 2027...")
+        logging.info("Attempting to trigger ASP.NET PostBack for Jan/Feb 2027...")
 
-        # 1. Open the Month dropdown
-        month_button = page.locator("button, div, a").filter(has_text=re.compile(r"^\s*Month\s*$", re.I)).first
-        if month_button.count() == 0:
-            month_button = page.locator(":text('Month')").first
+        # 1. First attempt direct client-side execution using exact WebForms target IDs
+        target_ids = [
+            "ctl00$cphMemberBody$rpMonth$ctl05$lbMonth",  # January 2027
+            "ctl00$cphMemberBody$rpMonth$ctl06$lbMonth"   # February 2027
+        ]
 
-        if month_button.count() > 0:
-            month_button.click()
-            page.wait_for_timeout(1500)
+        # Execute PostBack for January 2027 directly
+        logging.info(f"Invoking __doPostBack for January 2027 ({target_ids[0]})...")
+        page.evaluate(f"__doPostBack('{target_ids[0]}', '');")
+        
+        # Wait for ASP.NET AJAX UpdatePanel to finish response
+        page.wait_for_load_state("networkidle", timeout=15000)
+        page.wait_for_timeout(4000)
+        logging.info("Completed ASP.NET PostBack request for 2027 inventory.")
 
-            # 2. Locate target menu link
-            target_anchors = page.locator("ul.dropdown-menu a, .dropdown-menu a, a").filter(has_text=re.compile(r"2027"))
-            jan_feb_2027 = target_anchors.filter(has_text=re.compile(r"(january|february),\s*2027", re.I))
-
-            if jan_feb_2027.count() > 0:
-                chosen_link = jan_feb_2027.first
-                
-                # Check for direct href URL navigation
-                href_attr = chosen_link.get_attribute("href") or ""
-                if href_attr and not href_attr.startswith("javascript:") and href_attr != "#":
-                    logging.info(f"Navigating directly to month filter URL: {href_attr}")
-                    page.goto(href_attr, wait_until="networkidle")
-                else:
-                    # Perform physical mouse click to trigger client-side event listeners
-                    logging.info("Triggering physical click on dropdown option...")
-                    chosen_link.click()
-                    page.wait_for_timeout(2000)
-
-                # 3. Check for an explicit Search/Filter/Submit button and click it if present
-                search_btn = page.locator("button, input[type='submit'], input[type='button'], a").filter(
-                    has_text=re.compile(r"^\s*(search|filter|apply|submit|find)\s*$", re.I)
-                ).first
-
-                if search_btn.count() > 0 and search_btn.is_visible():
-                    logging.info("Found Search/Apply button. Submitting filter form...")
-                    search_btn.click()
-                    page.wait_for_load_state("networkidle", timeout=15000)
-
-                page.wait_for_timeout(5000)
-                logging.info("Completed month filter selection and waited for DOM update.")
-            else:
-                logging.warning("Opened Month dropdown but found no Jan/Feb 2027 options.")
-        else:
-            logging.warning("Could not locate the 'Month' filter dropdown.")
     except Exception as e:
-        logging.error(f"Error while applying month filter: {e}")
+        logging.error(f"Error triggering 2027 month PostBack: {e}")
 
 
 def extract_all_pages_inventory(page):
