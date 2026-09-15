@@ -208,35 +208,47 @@ def dismiss_modals(page):
 
 
 def filter_by_2027_months(page):
-    """Extracts and executes the exact JavaScript href payload attached to the Jan 2027 control."""
+    """Executes the Jan 2027 PostBack script while logging the raw AJAX server payload."""
     try:
-        logging.info("Attempting to filter by January 2027 by executing its exact href script...")
+        logging.info("Attempting to filter by January 2027 and capture AJAX response...")
 
-        # 1. Open dropdown menu to ensure element script attributes are rendered
+        # 1. Open dropdown menu to load elements in DOM
         month_btn = page.locator("button, div, a").filter(has_text=re.compile(r"^\s*Month\s*$", re.I)).first
         if month_btn.count() > 0:
             month_btn.click()
             page.wait_for_timeout(1000)
 
-        # 2. Locate the January 2027 LinkButton
         jan_link = page.locator("a[id$='rpMonth_ctl05_lbMonth']").first
 
         if jan_link.count() > 0:
-            # Extract the exact javascript:__doPostBack(...) string from the href
             href = jan_link.get_attribute("href") or ""
-            logging.info(f"Found January 2027 href: {href}")
+            js_code = href.replace("javascript:", "")
 
-            if href.startswith("javascript:"):
-                js_code = href.replace("javascript:", "")
-                
-                # Execute the postback script and wait for AJAX network response
-                with page.expect_response(lambda res: "Condos.aspx" in res.url or res.status == 200, timeout=15000):
-                    page.evaluate(js_code)
+            # 2. Attach network response listener to capture POST response body
+            def handle_response(response):
+                if "Condos.aspx" in response.url and response.request.method == "POST":
+                    try:
+                        body_text = response.text()
+                        snippet = body_text[:500].replace("\n", " ").replace("\r", " ")
+                        logging.info(f"--- GDV POSTBACK RESPONSE RAW (First 500 chars) ---")
+                        logging.info(f"{snippet}")
+                        
+                        if "2027" in body_text:
+                            logging.info("SUCCESS: '2027' detected in server AJAX response payload!")
+                        else:
+                            logging.warning("WARNING: '2027' NOT found in server AJAX response payload.")
+                    except Exception as err:
+                        logging.error(f"Failed to read AJAX response body: {err}")
 
-                page.wait_for_timeout(4000)
-                logging.info("Successfully executed January 2027 PostBack script.")
-            else:
-                logging.warning("January 2027 href does not contain a javascript: statement.")
+            page.on("response", handle_response)
+
+            # 3. Execute script and wait for response
+            page.evaluate(js_code)
+            page.wait_for_timeout(5000)
+
+            # Remove listener after execution
+            page.remove_listener("response", handle_response)
+            logging.info("Completed January 2027 PostBack and network response inspection.")
         else:
             logging.warning("January 2027 LinkButton not found in DOM.")
 
