@@ -195,26 +195,35 @@ def extract_all_pages_inventory(page):
     return all_parsed_items
 def select_month_and_search(page, start_date_str):
     """
-    Triggers GDV ASP.NET PostBack or URL query parameter with forced navigation,
-    then waits for the updated DOM inventory cards to load.
+    Opens the GDV search filter menu, selects the target date/month, 
+    and submits the ASP.NET filter form.
     """
-    # 1. First attempt: Navigate with explicit query parameter that GDV ASP.NET page reads
-    target_url = f"https://globaldiscoveryvacations.com/condos/Condos.aspx?m={start_date_str}"
-    
-    with page.expect_navigation(wait_until="networkidle", timeout=30000):
-        page.goto(target_url)
-    
+    # 1. Load the main Condos search page
+    condos_url = "https://globaldiscoveryvacations.com/condos/Condos.aspx"
+    page.goto(condos_url, wait_until="networkidle", timeout=30000)
     dismiss_modals(page)
-    
-    # 2. Try triggering ASP.NET JavaScript PostBack if available
-    try:
-        page.evaluate(f"if (typeof __doPostBack === 'function') {{ __doPostBack('ctl00$cphMemberBody$btnSearch', '{start_date_str}'); }}")
-        page.wait_for_timeout(3000)
-        page.wait_for_load_state("networkidle")
-    except Exception as e:
-        logging.info(f"PostBack evaluation skipped or handled: {e}")
 
-    page.wait_for_timeout(2000)
+    try:
+        # 2. Click the Bootstrap filter/search dropdown button on the page
+        filter_btn = page.locator("button.dropdown-toggle").first
+        if filter_btn.is_visible():
+            filter_btn.click()
+            page.wait_for_timeout(1000)
+
+        # 3. If an input field appears inside the dropdown/modal, fill it
+        date_field = page.locator("input[type='text']:not(.hidden)").first
+        if date_field.is_visible():
+            date_field.fill(start_date_str)
+            date_field.press("Enter")
+        else:
+            # Fallback: Trigger PostBack directly to submit form filters
+            page.evaluate(f"if (typeof __doPostBack === 'function') {{ __doPostBack('ctl00$cphMemberBody$btnSearch', '{start_date_str}'); }}")
+            
+        page.wait_for_load_state("networkidle")
+        page.wait_for_timeout(2000)
+
+    except Exception as e:
+        logging.warning(f"Filter interaction fallback applied: {e}")
 
 
 def process_target_months(page):
