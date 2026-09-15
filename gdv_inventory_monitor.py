@@ -208,7 +208,7 @@ def dismiss_modals(page):
 
 
 def filter_by_2027_months(page):
-    """Interacts with the Month dropdown control to target January/February 2027 and triggers DOM update."""
+    """Interacts with the Month dropdown control and forces an ASP.NET PostBack update."""
     try:
         logging.info("Attempting to open 'Month' dropdown control...")
         
@@ -234,20 +234,24 @@ def filter_by_2027_months(page):
                     chosen_link = target_anchors.first
                     logging.info("Selected first available 2027 option from menu.")
 
-                # Dispatch standard click via JS execution to force ASP.NET / jQuery handlers
-                element_handle = chosen_link.element_handle()
-                if element_handle:
-                    page.evaluate("(el) => { el.click(); if (el.href && el.href.startsWith('javascript:')) eval(el.href.replace('javascript:', '')); }", element_handle)
+                # Extract href to check for ASP.NET __doPostBack calls
+                href_attr = chosen_link.get_attribute("href") or ""
+                
+                if "javascript:__doPostBack" in href_attr:
+                    logging.info("Executing native ASP.NET __doPostBack JavaScript call...")
+                    page.evaluate(href_attr.replace("javascript:", ""))
                 else:
+                    # Hover and physically dispatch mousedown/mouseup to trigger jQuery click events
+                    chosen_link.hover()
+                    page.wait_for_timeout(300)
                     chosen_link.click(force=True)
 
-                # Check if a Submit/Search button exists to finalize the filter
-                search_btn = page.locator("button, input[type='submit'], a").filter(has_text=re.compile(r"^\s*(search|filter|apply)\s*$", re.I)).first
-                if search_btn.count() > 0 and search_btn.is_visible():
-                    logging.info("Found filter submit button. Clicking to apply...")
-                    search_btn.click()
+                # Wait for ASP.NET update panel / AJAX response
+                try:
+                    page.wait_for_response(lambda res: res.status == 200, timeout=10000)
+                except Exception:
+                    pass
 
-                page.wait_for_load_state("networkidle", timeout=15000)
                 page.wait_for_timeout(5000)
                 logging.info("Clicked 2027 month filter link and waited for DOM update.")
             else:
