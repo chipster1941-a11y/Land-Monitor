@@ -208,40 +208,31 @@ def dismiss_modals(page):
 
 
 def filter_by_2027_months(page):
-    """Dispatches native click and ensures ASP.NET event targets are initialized."""
+    """Opens the Month menu and triggers the ASP.NET LinkButton via native keyboard interaction."""
     try:
-        logging.info("Attempting to filter by January 2027 via DOM dispatch...")
+        logging.info("Attempting to filter by January 2027 via Keyboard focus...")
 
-        # 1. Expand the Month dropdown menu in the UI
-        page.evaluate("""() => {
-            let monthBtn = Array.from(document.querySelectorAll('button, a')).find(el => el.textContent.trim().toLowerCase() === 'month');
-            if (monthBtn) monthBtn.click();
-        }""")
-        page.wait_for_timeout(1000)
+        # 1. Click the Month dropdown menu to bring links into active view
+        month_btn = page.locator("button, div, a").filter(has_text=re.compile(r"^\s*Month\s*$", re.I)).first
+        if month_btn.count() > 0:
+            month_btn.click()
+            page.wait_for_timeout(1000)
 
-        # 2. Trigger native click event and form hidden inputs together
-        with page.expect_navigation(wait_until="networkidle", timeout=15000):
-            page.evaluate("""() => {
-                let targetId = "ctl00_cphMemberBody_rpMonth_ctl05_lbMonth";
-                let link = document.getElementById(targetId);
+        # 2. Locate the January 2027 LinkButton
+        jan_link = page.locator("a[id$='rpMonth_ctl05_lbMonth']").first
 
-                if (link) {
-                    // Set form inputs in case PostBack inspects target directly
-                    let eventTarget = document.getElementById('__EVENTTARGET') || document.querySelector("input[name='__EVENTTARGET']");
-                    if (eventTarget) eventTarget.value = "ctl00$cphMemberBody$rpMonth$ctl05$lbMonth";
-                    
-                    let eventArg = document.getElementById('__EVENTARGUMENT') || document.querySelector("input[name='__EVENTARGUMENT']");
-                    if (eventArg) eventArg.value = "";
+        if jan_link.count() > 0:
+            # Focus directly on the element and press Enter to trigger the ASP.NET PostBack natively
+            jan_link.focus()
+            page.wait_for_timeout(300)
+            
+            with page.expect_response(lambda res: res.status == 200, timeout=15000):
+                page.keyboard.press("Enter")
 
-                    // Dispatch native click event directly on element
-                    link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-                } else if (typeof __doPostBack === 'function') {
-                    __doPostBack('ctl00$cphMemberBody$rpMonth$ctl05$lbMonth', '');
-                }
-            }""")
-
-        page.wait_for_timeout(3000)
-        logging.info("Successfully dispatched PostBack for January 2027.")
+            page.wait_for_timeout(4000)
+            logging.info("Successfully sent Enter press to January 2027 control.")
+        else:
+            logging.warning("January 2027 LinkButton control not found in DOM.")
 
     except Exception as e:
         logging.error(f"Error filtering by 2027 month link: {e}")
