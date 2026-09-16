@@ -92,17 +92,12 @@ def is_priority_location(text):
 def is_us_location(text):
     lower_text = text.lower()
     
+    # 1. Reject explicit international listings
     if any(keyword in lower_text for keyword in NON_US_KEYWORDS):
         return False
         
-    if is_priority_location(text):
-        return True
-        
-    for pattern in US_STATE_PATTERNS:
-        if re.search(pattern, text, re.IGNORECASE):
-            return True
-            
-    return False
+    # 2. Default to True for everything else (US states, priority regions, and generic/truncated cards)
+    return True
 
 
 def send_email_notification(new_weeks):
