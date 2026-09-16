@@ -193,34 +193,34 @@ def extract_all_pages_inventory(page):
             break
 
     return all_parsed_items
+
 def select_month_and_search(page, start_date_str):
     """
-    Sets search parameters on GDV's portal and submits the search form.
+    Sets ASP.NET hidden/visible form values and executes __doPostBack to force page update.
     """
     condos_url = "https://globaldiscoveryvacations.com/condos/Condos.aspx"
     page.goto(condos_url, wait_until="networkidle", timeout=30000)
     dismiss_modals(page)
 
     try:
-        # 1. Look for any visible text input inside open filters or popovers
-        inputs = page.locator("input[type='text']:not([class*='hidden'])")
+        # Inject date string directly into ASP.NET form controls via JS evaluation
+        page.evaluate(f"""
+            () => {{
+                let dateInputs = document.querySelectorAll("input[type='text'], input[id*='Date']");
+                dateInputs.forEach(i => i.value = '{start_date_str}');
+                
+                if (typeof __doPostBack === 'function') {{
+                    __doPostBack('ctl00$cphMemberBody$btnSearch', '');
+                }}
+            }}
+        """)
         
-        if inputs.count() > 0:
-            first_input = inputs.first
-            first_input.fill(start_date_str)
-            first_input.press("Enter")
-            page.wait_for_load_state("networkidle")
-        else:
-            # 2. If no direct text input is visible, trigger ASP.NET submit directly
-            page.evaluate(
-                f"if (typeof __doPostBack === 'function') {{ __doPostBack('ctl00$cphMemberBody$btnSearch', '{start_date_str}'); }}"
-            )
-            page.wait_for_load_state("networkidle")
-
-        page.wait_for_timeout(2000)
+        page.wait_for_load_state("networkidle")
+        page.wait_for_timeout(3000)
+        dismiss_modals(page)
 
     except Exception as e:
-        logging.warning(f"Filter interaction note: {e}")
+        logging.warning(f"PostBack injection attempt completed with message: {e}")
 
 
 def process_target_months(page):
@@ -313,8 +313,8 @@ def run_gdv_scrape():
             checkin_year = extract_checkin_year(item_text)
             has_priority_loc = is_priority_location(item_text)
 
-            # Allow 2027 or late 2026 (Oct/Nov/Dec)
-            is_allowed_year = (checkin_year == TARGET_YEAR) or (checkin_year == 2026 and checkin_month >= 10)
+            # Allow any listing from 2026 or 2027 (or TARGET_YEAR)
+            is_allowed_year = checkin_year in [2026, 2027, TARGET_YEAR]
 
             if not has_priority_loc and checkin_year and not is_allowed_year:
                 logging.info(f"Skipping non-priority listing with Check-In year {checkin_year}: {item_text[:40]}...")
