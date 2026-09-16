@@ -190,19 +190,19 @@ def extract_all_pages_inventory(page):
     return all_parsed_items
 
 def select_month_and_search(page, start_date_str):
-    """
-    Sets ASP.NET hidden/visible form values and executes __doPostBack to force page update.
-    """
     condos_url = "https://globaldiscoveryvacations.com/condos/Condos.aspx"
     page.goto(condos_url, wait_until="networkidle", timeout=30000)
     dismiss_modals(page)
 
     try:
-        # Inject date string directly into ASP.NET form controls via JS evaluation
         page.evaluate(f"""
             () => {{
-                let dateInputs = document.querySelectorAll("input[type='text'], input[id*='Date']");
-                dateInputs.forEach(i => i.value = '{start_date_str}');
+                let dateInputs = document.querySelectorAll("input[type='text'], input[id*='Date'], select[id*='Month'], select[id*='Year']");
+                dateInputs.forEach(i => {{
+                    i.value = '{start_date_str}';
+                    i.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    i.dispatchEvent(new Event('blur', {{ bubbles: true }}));
+                }});
                 
                 if (typeof __doPostBack === 'function') {{
                     __doPostBack('ctl00$cphMemberBody$btnSearch', '');
