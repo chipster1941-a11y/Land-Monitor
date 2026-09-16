@@ -195,27 +195,46 @@ def select_month_and_search(page, start_date_str):
     dismiss_modals(page)
 
     try:
-        page.evaluate(f"""
-            () => {{
-                let dateInputs = document.querySelectorAll("input[type='text'], input[id*='Date'], select[id*='Month'], select[id*='Year']");
-                dateInputs.forEach(i => {{
-                    i.value = '{start_date_str}';
-                    i.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                    i.dispatchEvent(new Event('blur', {{ bubbles: true }}));
-                }});
-                
-                if (typeof __doPostBack === 'function') {{
-                    __doPostBack('ctl00$cphMemberBody$btnSearch', '');
-                }}
-            }}
+        # Log input/select element IDs to expose ASP.NET control names
+        controls = page.evaluate("""
+            () => {
+                const els = document.querySelectorAll("input, select");
+                return Array.from(els).map(e => ({
+                    tag: e.tagName,
+                    id: e.id,
+                    name: e.name,
+                    type: e.type,
+                    class: e.className
+                })).filter(e => e.id || e.name);
+            }
         """)
-        
-        page.wait_for_load_state("networkidle")
+        logging.info(f"Discovered {len(controls)} form controls on page.")
+        for c in controls[:15]:  # Log first 15 controls
+            logging.info(f"Control: {c}")
+
+        # Native Playwright interaction for date input
+        date_input = page.locator("input[id*='Date'], input[name*='Date'], .hasDatepicker").first
+        if date_input.count() > 0 and date_input.is_visible():
+            date_input.click()
+            date_input.fill("")
+            date_input.type(start_date_str, delay=100)
+            date_input.press("Tab")
+            page.wait_for_timeout(1000)
+
+        # Submit via click or PostBack fallback
+        search_btn = page.locator("input[id*='btnSearch'], button[id*='btnSearch'], a[id*='btnSearch']").first
+        if search_btn.count() > 0 and search_btn.is_visible():
+            with page.expect_navigation(timeout=20000):
+                search_btn.click()
+        else:
+            page.evaluate("__doPostBack('ctl00$cphMemberBody$btnSearch', '')")
+            page.wait_for_load_state("networkidle")
+
         page.wait_for_timeout(3000)
         dismiss_modals(page)
 
     except Exception as e:
-        logging.warning(f"PostBack injection attempt completed with message: {e}")
+        logging.warning(f"Form submission handling message: {e}")
 
 
 def process_target_months(page):
