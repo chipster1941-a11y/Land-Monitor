@@ -313,10 +313,14 @@ def run_gdv_scrape():
             checkin_year = extract_checkin_year(item_text)
             has_priority_loc = is_priority_location(item_text)
 
-            # Allow any listing from 2026 or 2027 (or TARGET_YEAR)
+            # If year extraction returns None/empty, default to 2026 so it isn't skipped silently
+            if not checkin_year:
+                checkin_year = 2026
+
+            # Force allow 2026, 2027, or TARGET_YEAR
             is_allowed_year = checkin_year in [2026, 2027, TARGET_YEAR]
 
-            if not has_priority_loc and checkin_year and not is_allowed_year:
+            if not has_priority_loc and not is_allowed_year:
                 logging.info(f"Skipping non-priority listing with Check-In year {checkin_year}: {item_text[:40]}...")
                 continue
 
