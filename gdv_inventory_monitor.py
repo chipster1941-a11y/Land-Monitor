@@ -301,10 +301,6 @@ def run_gdv_scrape():
 
         # 3. Evaluate listings
         for item_text in parsed_items:
-            if not is_us_location(item_text):
-                logging.info(f"Skipping non-US listing: {item_text[:40]}...")
-                continue
-
             checkin_year_raw = extract_checkin_year(item_text)
             has_priority_loc = is_priority_location(item_text)
 
@@ -314,22 +310,12 @@ def run_gdv_scrape():
             except (ValueError, TypeError):
                 checkin_year = 2026
 
-            # Now all elements in the comparison list are integers
+            # Filter for allowable target years
             is_allowed_year = checkin_year in [2026, 2027]
 
             if not has_priority_loc and not is_allowed_year:
                 logging.info(f"Skipping non-priority listing with Check-In year {checkin_year}: {item_text[:40]}...")
                 continue
-
-            item_id = item_text[:100]
-
-            if item_id not in seen_weeks:
-                seen_weeks.add(item_id)
-                new_weeks.append({
-                    "clean_title": item_text,
-                    "dates": TARGET_MONTH_LABEL,
-                    "is_priority": has_priority_loc
-                })
 
             item_id = item_text[:100]
 
