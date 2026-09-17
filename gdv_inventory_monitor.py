@@ -176,7 +176,6 @@ def extract_all_pages_inventory(page):
 
     return all_parsed_items
 
-
 def select_month_and_search(page, target_month_str):
     condos_url = "https://globaldiscoveryvacations.com/condos/Condos.aspx"
     page.goto(condos_url, wait_until="networkidle", timeout=30000)
@@ -209,7 +208,7 @@ def select_month_and_search(page, target_month_str):
 
                 page.wait_for_timeout(1500)
 
-                # Find any search or submit buttons on the page
+                # Find any search or submit buttons on the page for debugging
                 buttons = page.locator("input[type='submit'], button, a.btn").all()
                 btn_info = [f"Tag: {b.evaluate('e => e.tagName')}, ID: {b.get_attribute('id')}, Value/Text: {b.get_attribute('value') or b.inner_text()}" for b in buttons if b.is_visible()]
                 logging.info(f"Visible buttons on page: {btn_info}")
@@ -235,6 +234,7 @@ def select_month_and_search(page, target_month_str):
 
     except Exception as e:
         logging.warning(f"Error during Bootstrap month selection: {e}")
+
 
 
 def process_target_months(page):
