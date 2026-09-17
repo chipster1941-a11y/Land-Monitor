@@ -183,20 +183,32 @@ def select_month_and_search(page, target_month_str):
     dismiss_modals(page)
 
     try:
-        month_btn = page.locator("button:has-text('Month')").first
+        month_btn = page.locator("button:has-text('Month'), .dropdown-toggle:has-text('Month')").first
         if month_btn.is_visible():
             logging.info("Clicking Bootstrap Month dropdown button...")
             month_btn.click()
             page.wait_for_timeout(1000)
 
-            month_option = page.locator(f"a:has-text('{target_month_str}'), li:has-text('{target_month_str}')").first
+            # Try exact match first (e.g., "November, 2026"), then fall back to short month name
+            parts = target_month_str.replace(",", "").split()
+            full_month = parts[0] if len(parts) > 0 else ""
+            short_month = full_month[:3]  # 'Nov'
+            year = parts[1] if len(parts) > 1 else ""
+
+            month_option = page.locator(
+                f".dropdown-menu a:has-text('{target_month_str}'), "
+                f".dropdown-menu li:has-text('{target_month_str}'), "
+                f".dropdown-menu a:has-text('{short_month}'), "
+                f"a:has-text('{target_month_str}')"
+            ).first
+
             if month_option.is_visible():
                 logging.info(f"Selecting option for {target_month_str}...")
                 month_option.click()
                 page.wait_for_load_state("networkidle")
                 page.wait_for_timeout(2000)
             else:
-                logging.warning(f"Could not find dropdown option text for {target_month_str}")
+                logging.warning(f"Could not find dropdown option text for '{target_month_str}'")
         else:
             logging.warning("Month dropdown button was not visible on page.")
 
@@ -209,11 +221,11 @@ def select_month_and_search(page, target_month_str):
 def process_target_months(page):
     """Navigates to GDV Condo search, applies target dates, and extracts inventory."""
     target_months = [
-        ("November 2026", "fl_only"),
-        ("December 2026", "fl_only"),
-        ("January 2027", "fl_only"),
-        ("February 2027", "fl_only"),
-        ("September 2027", "sept_2027_states")
+        ("November, 2026", "fl_only"),
+        ("December, 2026", "fl_only"),
+        ("January, 2027", "fl_only"),
+        ("February, 2027", "fl_only"),
+        ("September, 2027", "sept_2027_states")
     ]
     
     combined_items = []
