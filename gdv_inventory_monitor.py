@@ -18,14 +18,13 @@ EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
 
 SEEN_WEEKS_FILE = "seen_gdv_weeks.json"
-TARGET_MONTH_LABEL = "Jan/Feb 2027 & Priority FL Regions (US Only)"
-TARGET_YEAR = "2027"
+TARGET_MONTH_LABEL = "Nov 2026 - Feb 2027 (FL) | Sept 2027 (MI, VA, TN, NC) | Priority FL Regions"
 
 PRIORITY_LOCATIONS = [
     # Florida Keys
     "florida keys", "key west", "key largo", "marathon", "islamorada", "big pine key",
     # Gulf Coast / Southwest Florida
-    "sanibel", "captiva", "marco island", "naples", "fort myers beach", "bonita springs", "estero",
+    "sanibel", "captiva", "marco island", "naples", "fort myers", "fort myers beach", "bonita springs", "estero",
     # Southeast Florida / Miami Metro Area
     "miami", "miami beach", "south beach", "fort lauderdale", "ft. lauderdale", "pompano beach",
     "hollywood", "boca raton", "delray beach", "west palm beach", "sunny isles", "key biscayne"
@@ -37,19 +36,13 @@ NON_US_KEYWORDS = [
     "st. maarten", "costa rica", "belize", "canada", "barbados"
 ]
 
-US_STATE_PATTERNS = [
-    r"\bnorth\s+carolina\b", r"\bsouth\s+carolina\b", r"\bvirginia\b", r"\bflorida\b",
-    r"\bgeorgia\b", r"\btennessee\b", r"\bmichigan\b", r"\bwisconsin\b",
-    r"\bNC\b", r"\bFL\b", r"\bSC\b", r"\bVA\b", r"\bTN\b", r"\bGA\b",
-    r"\bMA\b", r"massachusetts", r"\bNH\b", r"new hampshire", r"\bMO\b", r"missouri",
-    r"\bOR\b", r"oregon", r"\bID\b", r"idaho", r"\bIN\b", r"indiana", r"\bMI\b", r"\bWI\b",
-    r",\s*AL\b", r",\s*AK\b", r",\s*AZ\b", r",\s*AR\b", r",\s*CA\b", r",\s*CO\b", r",\s*CT\b", r",\s*DE\b",
-    r",\s*FL\b", r",\s*GA\b", r",\s*HI\b", r",\s*ID\b", r",\s*IL\b", r",\s*IN\b", r",\s*IA\b", r",\s*KS\b",
-    r",\s*KY\b", r",\s*LA\b", r",\s*ME\b", r",\s*MD\b", r",\s*MA\b", r",\s*MI\b", r",\s*MN\b", r",\s*MS\b",
-    r",\s*MO\b", r",\s*MT\b", r",\s*NE\b", r",\s*NV\b", r",\s*NH\b", r",\s*NJ\b", r",\s*NM\b", r",\s*NY\b",
-    r",\s*NC\b", r",\s*ND\b", r",\s*OH\b", r",\s*OK\b", r",\s*OR\b", r",\s*PA\b", r",\s*RI\b", r",\s*SC\b",
-    r",\s*SD\b", r",\s*TN\b", r",\s*TX\b", r",\s*UT\b", r",\s*VT\b", r",\s*VA\b", r",\s*WA\b", r",\s*WV\b",
-    r",\s*WI\b", r",\s*WY\b", r"\bUSA\b", r"\bUnited States\b"
+# Regional location matchers
+FLORIDA_PATTERNS = [r"\bflorida\b", r"\bfl\b"]
+SEPT_2027_STATES_PATTERNS = [
+    r"\bmichigan\b", r"\bmi\b",
+    r"\bvirginia\b", r"\bva\b",
+    r"\btennessee\b", r"\btn\b",
+    r"\bnorth carolina\b", r"\bnc\b"
 ]
 
 
@@ -77,13 +70,6 @@ def clean_resort_text(raw_text):
     return " ".join(text.split())
 
 
-def extract_checkin_year(text):
-    match = re.search(r"Check-In:\s*\w*\s*(\d{2})/(\d{2})/(\d{2})", text, re.IGNORECASE)
-    if match:
-        return f"20{match.group(3)}"
-    return None
-
-
 def is_priority_location(text):
     lower_text = text.lower()
     return any(loc in lower_text for loc in PRIORITY_LOCATIONS)
@@ -91,13 +77,14 @@ def is_priority_location(text):
 
 def is_us_location(text):
     lower_text = text.lower()
-    
-    # 1. Reject explicit international listings
     if any(keyword in lower_text for keyword in NON_US_KEYWORDS):
         return False
-        
-    # 2. Default to True for everything else (US states, priority regions, and generic/truncated cards)
     return True
+
+
+def matches_patterns(text, patterns):
+    lower_text = text.lower()
+    return any(re.search(pat, lower_text) for pat in patterns)
 
 
 def send_email_notification(new_weeks):
@@ -108,7 +95,7 @@ def send_email_notification(new_weeks):
     msg = MIMEMultipart()
     msg["From"] = EMAIL_SENDER
     msg["To"] = EMAIL_RECEIVER
-    msg["Subject"] = f"🚨 GDV Inventory Alert: {len(new_weeks)} New US Resort Listing(s) Found!"
+    msg["Subject"] = f"🚨 GDV Inventory Alert: {len(new_weeks)} New Resort Listing(s) Found!"
 
     body_text = f"Global Discovery Vacations - New Inventory Alert\n"
     body_text += f"{'=' * 50}\n"
@@ -189,69 +176,79 @@ def extract_all_pages_inventory(page):
 
     return all_parsed_items
 
-def select_month_and_search(page, start_date_str):
+
+def select_month_and_search(page, target_month_str):
     condos_url = "https://globaldiscoveryvacations.com/condos/Condos.aspx"
     page.goto(condos_url, wait_until="networkidle", timeout=30000)
     dismiss_modals(page)
 
-    # 1. Save screenshot of initial load to inspect visually in GitHub Actions artifacts
     try:
-        page.screenshot(path="gdv_condos_page.png", full_page=True)
-        logging.info("Saved search page screenshot to gdv_condos_page.png")
-    except Exception as e:
-        logging.warning(f"Failed to capture screenshot: {e}")
+        month_btn = page.locator("button:has-text('Month')").first
+        if month_btn.is_visible():
+            logging.info("Clicking Bootstrap Month dropdown button...")
+            month_btn.click()
+            page.wait_for_timeout(1000)
 
-    # 2. Check for IFRAMEs
-    iframes = page.frames
-    logging.info(f"Total frames found on page: {len(iframes)}")
-    for idx, frame in enumerate(iframes):
-        logging.info(f"Frame {idx}: Name='{frame.name}', URL='{frame.url}'")
+            month_option = page.locator(f"a:has-text('{target_month_str}'), li:has-text('{target_month_str}')").first
+            if month_option.is_visible():
+                logging.info(f"Selecting option for {target_month_str}...")
+                month_option.click()
+                page.wait_for_load_state("networkidle")
+                page.wait_for_timeout(2000)
+            else:
+                logging.warning(f"Could not find dropdown option text for {target_month_str}")
+        else:
+            logging.warning("Month dropdown button was not visible on page.")
 
-    # 3. Log all visible buttons, links, and clickable controls
-    try:
-        interactive_els = page.evaluate("""
-            () => {
-                const els = document.querySelectorAll("button, a, input[type='button'], input[type='submit'], select");
-                return Array.from(els)
-                    .filter(e => e.offsetHeight > 0 && e.offsetWidth > 0)
-                    .map(e => ({
-                        tag: e.tagName,
-                        id: e.id,
-                        text: e.innerText || e.value,
-                        class: e.className
-                    }));
-            }
-        """)
-        logging.info(f"Visible interactive controls ({len(interactive_els)} found):")
-        for el in interactive_els[:20]:
-            logging.info(f"Visible Control: {el}")
+        dismiss_modals(page)
+
     except Exception as e:
-        logging.warning(f"Error inspecting visible controls: {e}")
+        logging.warning(f"Error during Bootstrap month selection: {e}")
 
 
 def process_target_months(page):
     """Navigates to GDV Condo search, applies target dates, and extracts inventory."""
     target_months = [
-        ("January 2027", "01/01/2027"),
-        ("February 2027", "02/01/2027"),
+        ("November 2026", "fl_only"),
+        ("December 2026", "fl_only"),
+        ("January 2027", "fl_only"),
+        ("February 2027", "fl_only"),
+        ("September 2027", "sept_2027_states")
     ]
     
     combined_items = []
     
-    for month_name, start_date in target_months:
+    for month_label, region_rule in target_months:
         try:
-            logging.info(f"Navigating to condo portal and searching for {month_name} ({start_date})...")
+            logging.info(f"Navigating to condo portal and searching for {month_label}...")
             
-            # Execute search with target date
-            select_month_and_search(page, start_date)
-            
-            # Scrape inventory
+            select_month_and_search(page, month_label)
             month_items = extract_all_pages_inventory(page)
-            logging.info(f"Extracted {len(month_items)} items for {month_name}.")
-            combined_items.extend(month_items)
+            
+            logging.info(f"Extracted {len(month_items)} items for {month_label}. Applying location filters...")
+
+            for item_text in month_items:
+                # 1. Block international listings
+                if not is_us_location(item_text):
+                    continue
+
+                has_priority_loc = is_priority_location(item_text)
+
+                # 2. Priority locations bypass standard state limits
+                if has_priority_loc:
+                    combined_items.append({"text": item_text, "is_priority": True})
+                    continue
+
+                # 3. Apply state restrictions based on target month rules
+                if region_rule == "fl_only":
+                    if matches_patterns(item_text, FLORIDA_PATTERNS):
+                        combined_items.append({"text": item_text, "is_priority": False})
+                elif region_rule == "sept_2027_states":
+                    if matches_patterns(item_text, SEPT_2027_STATES_PATTERNS):
+                        combined_items.append({"text": item_text, "is_priority": False})
 
         except Exception as e:
-            logging.error(f"Error executing extraction for {month_name}: {e}")
+            logging.error(f"Error executing extraction for {month_label}: {e}")
 
     return combined_items
 
@@ -306,33 +303,13 @@ def run_gdv_scrape():
         logging.info(f"Member login successful! Current URL: {page.url}")
         dismiss_modals(page)
 
-        # 2. Extract listings across target months
-        parsed_items = process_target_months(page)
-        logging.info(f"Successfully extracted {len(parsed_items)} total resort listing cards across all target months.")
+        # 2. Extract listings across target months with rules
+        filtered_items = process_target_months(page)
+        logging.info(f"Successfully filtered to {len(filtered_items)} matching resort listings across all criteria.")
 
-        # 3. Evaluate listings
-        for item_text in parsed_items:
-            # 1. Reject explicit international listings (Dominican Republic, Mexico, etc.)
-            if not is_us_location(item_text):
-                logging.info(f"Skipping non-US listing: {item_text[:40]}...")
-                continue
-
-            checkin_year_raw = extract_checkin_year(item_text)
-            has_priority_loc = is_priority_location(item_text)
-
-            # Safely cast string "2026" or "2027" into an integer
-            try:
-                checkin_year = int(checkin_year_raw) if checkin_year_raw else 2026
-            except (ValueError, TypeError):
-                checkin_year = 2026
-
-            # Filter for allowable target years
-            is_allowed_year = checkin_year in [2026, 2027]
-
-            if not has_priority_loc and not is_allowed_year:
-                logging.info(f"Skipping non-priority listing with Check-In year {checkin_year}: {item_text[:40]}...")
-                continue
-
+        # 3. Deduplicate against seen weeks
+        for item in filtered_items:
+            item_text = item["text"]
             item_id = item_text[:100]
 
             if item_id not in seen_weeks:
@@ -340,7 +317,7 @@ def run_gdv_scrape():
                 new_weeks.append({
                     "clean_title": item_text,
                     "dates": TARGET_MONTH_LABEL,
-                    "is_priority": has_priority_loc
+                    "is_priority": item["is_priority"]
                 })
 
         browser.close()
