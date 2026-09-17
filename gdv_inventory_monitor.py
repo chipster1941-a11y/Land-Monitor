@@ -198,26 +198,31 @@ def select_month_and_search(page, target_month_str):
 
             if month_option.is_visible():
                 logging.info(f"Selecting option for {target_month_str}...")
-                month_option.click()
-                page.wait_for_timeout(1000)
+                
+                # Check if the anchor tag has an href containing javascript:__doPostBack
+                href = month_option.get_attribute("href") or ""
+                if "javascript:" in href or "__doPostBack" in href:
+                    logging.info(f"Executing inline postback link: {href}")
+                    page.evaluate(href)
+                else:
+                    month_option.click()
 
-                # Look for form submit button or search action element
-                search_btn = page.locator(
-                    "input[type='submit'], "
-                    "button[type='submit'], "
-                    "a[id*='Search'], "
-                    "input[id*='Search'], "
-                    "button:has-text('Search'), "
-                    ".btn-search"
-                ).first
+                page.wait_for_timeout(1500)
 
+                # Find any search or submit buttons on the page
+                buttons = page.locator("input[type='submit'], button, a.btn").all()
+                btn_info = [f"Tag: {b.evaluate('e => e.tagName')}, ID: {b.get_attribute('id')}, Value/Text: {b.get_attribute('value') or b.inner_text()}" for b in buttons if b.is_visible()]
+                logging.info(f"Visible buttons on page: {btn_info}")
+
+                # Look for explicit Search button targets
+                search_btn = page.locator("input[value*='Search'], button:has-text('Search'), a:has-text('Search'), input[id*='Search']").first
                 if search_btn.count() > 0 and search_btn.is_visible():
-                    logging.info("Clicking Search submit button...")
+                    logging.info("Clicking visible Search submit button...")
                     search_btn.click()
                 else:
-                    logging.info("Triggering ASP.NET postback / Enter key on form...")
-                    # Press Enter to force WebForms submit if button isn't directly matched
-                    page.keyboard.press("Enter")
+                    # Fallback: Trigger standard ASP.NET postback directly on the form
+                    logging.info("Attempting direct form postback evaluation...")
+                    page.evaluate("__doPostBack('', '')")
 
                 page.wait_for_load_state("networkidle")
                 page.wait_for_timeout(3000)
