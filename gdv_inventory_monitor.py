@@ -189,24 +189,35 @@ def select_month_and_search(page, target_month_str):
             month_btn.click()
             page.wait_for_timeout(1000)
 
-            # Try exact match first (e.g., "November, 2026"), then fall back to short month name
-            parts = target_month_str.replace(",", "").split()
-            full_month = parts[0] if len(parts) > 0 else ""
-            short_month = full_month[:3]  # 'Nov'
-            year = parts[1] if len(parts) > 1 else ""
-
+            # Locate month option inside dropdown
             month_option = page.locator(
                 f".dropdown-menu a:has-text('{target_month_str}'), "
                 f".dropdown-menu li:has-text('{target_month_str}'), "
-                f".dropdown-menu a:has-text('{short_month}'), "
                 f"a:has-text('{target_month_str}')"
             ).first
 
             if month_option.is_visible():
                 logging.info(f"Selecting option for {target_month_str}...")
                 month_option.click()
-                page.wait_for_load_state("networkidle")
-                page.wait_for_timeout(2000)
+                page.wait_for_timeout(1000)
+
+                # Trigger the actual search submit button
+                search_btn = page.locator(
+                    "input[type='submit'][value*='Search'], "
+                    "button:has-text('Search'), "
+                    "a:has-text('Search'), "
+                    "#btnSearch, .btn-search"
+                ).first
+
+                if search_btn.count() > 0 and search_btn.is_visible():
+                    logging.info("Clicking Search submit button...")
+                    search_btn.click()
+                    page.wait_for_load_state("networkidle")
+                    page.wait_for_timeout(3000)
+                else:
+                    logging.info("No explicit search button found; waiting for auto-postback...")
+                    page.wait_for_load_state("networkidle")
+                    page.wait_for_timeout(2000)
             else:
                 logging.warning(f"Could not find dropdown option text for '{target_month_str}'")
         else:
