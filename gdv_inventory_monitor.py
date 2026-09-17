@@ -201,23 +201,26 @@ def select_month_and_search(page, target_month_str):
                 month_option.click()
                 page.wait_for_timeout(1000)
 
-                # Trigger the actual search submit button
+                # Look for form submit button or search action element
                 search_btn = page.locator(
-                    "input[type='submit'][value*='Search'], "
+                    "input[type='submit'], "
+                    "button[type='submit'], "
+                    "a[id*='Search'], "
+                    "input[id*='Search'], "
                     "button:has-text('Search'), "
-                    "a:has-text('Search'), "
-                    "#btnSearch, .btn-search"
+                    ".btn-search"
                 ).first
 
                 if search_btn.count() > 0 and search_btn.is_visible():
                     logging.info("Clicking Search submit button...")
                     search_btn.click()
-                    page.wait_for_load_state("networkidle")
-                    page.wait_for_timeout(3000)
                 else:
-                    logging.info("No explicit search button found; waiting for auto-postback...")
-                    page.wait_for_load_state("networkidle")
-                    page.wait_for_timeout(2000)
+                    logging.info("Triggering ASP.NET postback / Enter key on form...")
+                    # Press Enter to force WebForms submit if button isn't directly matched
+                    page.keyboard.press("Enter")
+
+                page.wait_for_load_state("networkidle")
+                page.wait_for_timeout(3000)
             else:
                 logging.warning(f"Could not find dropdown option text for '{target_month_str}'")
         else:
