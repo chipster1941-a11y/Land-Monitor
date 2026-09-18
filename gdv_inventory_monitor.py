@@ -177,66 +177,45 @@ def extract_all_pages_inventory(page):
     return all_parsed_items
 
 def select_month_and_search(page, target_month_str):
+    condos_url = "https://globaldiscoveryvacations.com/condos/Condos.aspx"
+    
     try:
-        if "Condos.aspx" not in page.url:
-            condos_url = "https://globaldiscoveryvacations.com/condos/Condos.aspx"
-            page.goto(condos_url, wait_until="networkidle", timeout=30000)
-            dismiss_modals(page)
+        logging.info(f"Navigating to condo portal and searching for {target_month_str}...")
+        page.goto(condos_url, wait_until="networkidle", timeout=30000)
+        dismiss_modals(page)
 
         month_btn = page.locator("button:has-text('Month'), .dropdown-toggle:has-text('Month')").first
+        month_btn.wait_for(state="visible", timeout=10000)
+
         if month_btn.is_visible():
-            logging.info(f"Setting month filter for {target_month_str}...")
+            logging.info(f"Opening month dropdown for {target_month_str}...")
             month_btn.click()
             page.wait_for_timeout(1000)
 
-            # 1. Click the visible Bootstrap dropdown link
-            month_option = page.locator(
-                f".dropdown-menu a:has-text('{target_month_str}'), "
-                f".dropdown-menu li:has-text('{target_month_str}'), "
-                f"a:has-text('{target_month_str}')"
-            ).first
+            # Target the lbMonth LinkButton inside rpMonth dropdown items
+            month_option = page.locator(f"a[id*='lbMonth']:has-text('{target_month_str}')").first
 
-            if month_option.is_visible():
-                href = month_option.get_attribute("href") or ""
+            if month_option.count() > 0 and month_option.is_visible():
+                logging.info(f"Clicking lbMonth LinkButton for {target_month_str}...")
                 month_option.click()
-                page.wait_for_timeout(1000)
-
-                # 2. If the option had a javascript/postback href, execute it directly
-                if "javascript:" in href or "__doPostBack" in href:
-                    logging.info(f"Executing postback script: {href}")
-                    page.evaluate(href)
-                else:
-                    # 3. Force ASP.NET hidden dropdown update and trigger postback manually
-                    logging.info("Updating ASP.NET form controls directly...")
-                    page.evaluate(f"""
-                        (() => {{
-                            let monthSelect = document.querySelector("select[id*='Month'], select[id*='month']");
-                            if (monthSelect) {{
-                                for (let opt of monthSelect.options) {{
-                                    if (opt.text.includes('{target_month_str}')) {{
-                                        monthSelect.value = opt.value;
-                                        monthSelect.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                                        break;
-                                    }}
-                                }}
-                            }}
-                            if (typeof __doPostBack === 'function') {{
-                                __doPostBack('', '');
-                            }}
-                        }})();
-                    """)
-
-                page.wait_for_load_state("networkidle")
-                page.wait_for_timeout(3000)
             else:
-                logging.warning(f"Could not find dropdown option text for '{target_month_str}'")
+                # Fallback: Search all anchor elements inside the month menu
+                fallback_option = page.locator(f".dropdown-menu a:has-text('{target_month_str}')").first
+                if fallback_option.is_visible():
+                    logging.info(f"Clicking fallback month anchor for {target_month_str}...")
+                    fallback_option.click()
+                else:
+                    logging.warning(f"Could not locate month option for '{target_month_str}'")
+
+            page.wait_for_load_state("networkidle")
+            page.wait_for_timeout(3000)
         else:
             logging.warning("Month dropdown button was not visible on page.")
 
         dismiss_modals(page)
 
     except Exception as e:
-        logging.warning(f"Error during month selection: {e}")
+        logging.warning(f"Error during month selection for {target_month_str}: {e}")
 
 
 
