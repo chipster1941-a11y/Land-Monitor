@@ -178,7 +178,6 @@ def extract_all_pages_inventory(page):
 
 def select_month_and_search(page, target_month_str):
     try:
-        # Only navigate if we are not already on the Condos search page
         if "Condos.aspx" not in page.url:
             condos_url = "https://globaldiscoveryvacations.com/condos/Condos.aspx"
             page.goto(condos_url, wait_until="networkidle", timeout=30000)
@@ -186,11 +185,11 @@ def select_month_and_search(page, target_month_str):
 
         month_btn = page.locator("button:has-text('Month'), .dropdown-toggle:has-text('Month')").first
         if month_btn.is_visible():
-            logging.info("Clicking Bootstrap Month dropdown button...")
+            logging.info(f"Setting month filter for {target_month_str}...")
             month_btn.click()
             page.wait_for_timeout(1000)
 
-            # Locate month option inside dropdown
+            # 1. Click the visible Bootstrap dropdown link
             month_option = page.locator(
                 f".dropdown-menu a:has-text('{target_month_str}'), "
                 f".dropdown-menu li:has-text('{target_month_str}'), "
@@ -198,15 +197,34 @@ def select_month_and_search(page, target_month_str):
             ).first
 
             if month_option.is_visible():
-                logging.info(f"Selecting option for {target_month_str}...")
-                
-                # Check for inline javascript/postback on the anchor
                 href = month_option.get_attribute("href") or ""
+                month_option.click()
+                page.wait_for_timeout(1000)
+
+                # 2. If the option had a javascript/postback href, execute it directly
                 if "javascript:" in href or "__doPostBack" in href:
-                    logging.info(f"Executing dropdown postback: {href}")
+                    logging.info(f"Executing postback script: {href}")
                     page.evaluate(href)
                 else:
-                    month_option.click()
+                    # 3. Force ASP.NET hidden dropdown update and trigger postback manually
+                    logging.info("Updating ASP.NET form controls directly...")
+                    page.evaluate(f"""
+                        (() => {{
+                            let monthSelect = document.querySelector("select[id*='Month'], select[id*='month']");
+                            if (monthSelect) {{
+                                for (let opt of monthSelect.options) {{
+                                    if (opt.text.includes('{target_month_str}')) {{
+                                        monthSelect.value = opt.value;
+                                        monthSelect.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                                        break;
+                                    }}
+                                }}
+                            }}
+                            if (typeof __doPostBack === 'function') {{
+                                __doPostBack('', '');
+                            }}
+                        }})();
+                    """)
 
                 page.wait_for_load_state("networkidle")
                 page.wait_for_timeout(3000)
@@ -218,7 +236,7 @@ def select_month_and_search(page, target_month_str):
         dismiss_modals(page)
 
     except Exception as e:
-        logging.warning(f"Error during Bootstrap month selection: {e}")
+        logging.warning(f"Error during month selection: {e}")
 
 
 
