@@ -26,12 +26,12 @@ jobs:
 
       - name: Run GDV Monitor
         env:
-          GDV_USER: ${{ secrets.GDV_USER }}
-          GDV_PASS: ${{ secrets.GDV_PASS }}
+          GDV_MEMBER_ID: ${{ secrets.GDV_MEMBER_ID }}
+          GDV_PASSWORD: ${{ secrets.GDV_PASSWORD }}
           EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
-          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
           EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
-        run: python gdv_inventory_monitor.py
+          run: python gdv_inventory_monitor.py
 
       - name: Commit and push updated seen state
         run: |
