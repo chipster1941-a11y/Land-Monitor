@@ -11,11 +11,11 @@ from playwright.sync_api import sync_playwright
 # Logging Configuration
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-# Environment Variables
-GDV_MEMBER_ID = os.getenv("GDV_MEMBER_ID")
-GDV_PASSWORD = os.getenv("GDV_PASSWORD")
+# Environment Variables (with fallback support for GitHub Actions)
+GDV_MEMBER_ID = os.getenv("GDV_MEMBER_ID") or os.getenv("GDV_USER")
+GDV_PASSWORD = os.getenv("GDV_PASSWORD") or os.getenv("GDV_PASS")
 EMAIL_SENDER = os.getenv("EMAIL_SENDER")
-EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD") or os.getenv("EMAIL_PASS")
 EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
 
 SEEN_WEEKS_FILE = "seen_gdv_weeks.json"
