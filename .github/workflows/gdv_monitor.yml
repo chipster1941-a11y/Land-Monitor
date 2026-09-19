@@ -2,22 +2,21 @@ name: GDV Inventory Monitor
 
 on:
   schedule:
-    # Runs every 30 minutes
-    - cron: '*/30 * * * *'
-  workflow_dispatch: # Allows manual trigger from GitHub UI
+    # Runs at :13 and :43 past the hour to avoid GitHub Actions queue delays
+    - cron: '13,43 * * * *'
+  workflow_dispatch:
 
 jobs:
-  scrape:
+  run-monitor:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Check out repository
+        uses: actions/checkout@v3
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: '3.10'
 
       - name: Install dependencies
         run: |
@@ -25,25 +24,20 @@ jobs:
           pip install playwright
           playwright install chromium
 
-      - name: Run GDV Scraper
+      - name: Run GDV Monitor
         env:
-          GDV_MEMBER_ID: ${{ secrets.GDV_MEMBER_ID }}
-          GDV_PASSWORD: ${{ secrets.GDV_PASSWORD }}
+          GDV_USER: ${{ secrets.GDV_USER }}
+          GDV_PASS: ${{ secrets.GDV_PASS }}
           EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
-          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
           EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
         run: python gdv_inventory_monitor.py
 
-      - name: Commit and push state
+      - name: Commit and push updated seen state
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git pull --rebase origin main
           git add seen_gdv_weeks.json
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Update GDV seen inventory state" && git push)
-  
-      - name: Upload Debug Screenshots
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: gdv-debug-screenshots
-          path: "*.png"
+          git diff-index --quiet HEAD || git commit -m "Update GDV seen inventory state"
+          git push origin main

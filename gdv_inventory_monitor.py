@@ -3,6 +3,7 @@ import json
 import logging
 import smtplib
 import re
+from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from playwright.sync_api import sync_playwright
@@ -50,7 +51,11 @@ def load_seen_weeks():
     if os.path.exists(SEEN_WEEKS_FILE):
         try:
             with open(SEEN_WEEKS_FILE, "r") as f:
-                return set(json.load(f))
+                data = json.load(f)
+                if isinstance(data, list):
+                    return set(data)
+                elif isinstance(data, dict):
+                    return set(data.keys())
         except Exception as e:
             logging.error(f"Error loading seen weeks: {e}")
     return set()
@@ -59,7 +64,7 @@ def load_seen_weeks():
 def save_seen_weeks(seen_weeks):
     try:
         with open(SEEN_WEEKS_FILE, "w") as f:
-            json.dump(list(seen_weeks), f, indent=2)
+            json.dump(sorted(list(seen_weeks)), f, indent=2)
         logging.info("Saved updated seen weeks state.")
     except Exception as e:
         logging.error(f"Error saving seen weeks: {e}")
@@ -77,9 +82,7 @@ def is_priority_location(text):
 
 def is_us_location(text):
     lower_text = text.lower()
-    if any(keyword in lower_text for keyword in NON_US_KEYWORDS):
-        return False
-    return True
+    return not any(keyword in lower_text for keyword in NON_US_KEYWORDS)
 
 
 def matches_patterns(text, patterns):
@@ -136,13 +139,55 @@ def dismiss_modals(page):
         pass
 
 
-def extract_all_pages_inventory(page):
+def select_month_and_search(page, target_month_str):
+    condos_url = "https://globaldiscoveryvacations.com/condos/Condos.aspx"
+    
+    try:
+        logging.info(f"Navigating to condo portal and searching for {target_month_str}...")
+        page.goto(condos_url, wait_until="networkidle", timeout=30000)
+        dismiss_modals(page)
+
+        month_btn = page.locator("button:has-text('Month'), .dropdown-toggle:has-text('Month')").first
+        month_btn.wait_for(state="visible", timeout=10000)
+
+        if month_btn.is_visible():
+            logging.info(f"Opening month dropdown for {target_month_str}...")
+            month_btn.click()
+            page.wait_for_timeout(1000)
+
+            # Target the lbMonth LinkButton inside rpMonth dropdown items
+            month_option = page.locator(f"a[id*='lbMonth']:has-text('{target_month_str}')").first
+
+            if month_option.count() > 0 and month_option.is_visible():
+                logging.info(f"Clicking lbMonth LinkButton for {target_month_str}...")
+                month_option.click()
+            else:
+                fallback_option = page.locator(f".dropdown-menu a:has-text('{target_month_str}')").first
+                if fallback_option.is_visible():
+                    logging.info(f"Clicking fallback month anchor for {target_month_str}...")
+                    fallback_option.click()
+                else:
+                    logging.warning(f"Could not locate month option for '{target_month_str}'")
+
+            page.wait_for_load_state("networkidle")
+            page.wait_for_timeout(3000)
+        else:
+            logging.warning("Month dropdown button was not visible on page.")
+
+        dismiss_modals(page)
+
+    except Exception as e:
+        logging.warning(f"Error during month selection for {target_month_str}: {e}")
+
+
+def extract_all_resort_cards(page, month_label):
+    """Iterates through all pagination pages for a given month search."""
     all_parsed_items = []
     page_num = 1
     max_pages = 5
 
     while page_num <= max_pages:
-        logging.info(f"Extracting resort cards from Page {page_num}...")
+        logging.info(f"Extracting resort cards from Page {page_num} for {month_label}...")
         
         view_resort_links = page.locator("a:has-text('View Resort')")
         link_count = view_resort_links.count()
@@ -167,7 +212,7 @@ def extract_all_pages_inventory(page):
         if next_button.count() > 0 and next_button.is_visible():
             logging.info(f"Clicking Next page control (Page {page_num + 1})...")
             next_button.click(force=True)
-            page.wait_for_timeout(5000)
+            page.wait_for_timeout(3000)
             dismiss_modals(page)
             page_num += 1
         else:
@@ -175,48 +220,6 @@ def extract_all_pages_inventory(page):
             break
 
     return all_parsed_items
-
-def select_month_and_search(page, target_month_str):
-    condos_url = "https://globaldiscoveryvacations.com/condos/Condos.aspx"
-    
-    try:
-        logging.info(f"Navigating to condo portal and searching for {target_month_str}...")
-        page.goto(condos_url, wait_until="networkidle", timeout=30000)
-        dismiss_modals(page)
-
-        month_btn = page.locator("button:has-text('Month'), .dropdown-toggle:has-text('Month')").first
-        month_btn.wait_for(state="visible", timeout=10000)
-
-        if month_btn.is_visible():
-            logging.info(f"Opening month dropdown for {target_month_str}...")
-            month_btn.click()
-            page.wait_for_timeout(1000)
-
-            # Target the lbMonth LinkButton inside rpMonth dropdown items
-            month_option = page.locator(f"a[id*='lbMonth']:has-text('{target_month_str}')").first
-
-            if month_option.count() > 0 and month_option.is_visible():
-                logging.info(f"Clicking lbMonth LinkButton for {target_month_str}...")
-                month_option.click()
-            else:
-                # Fallback: Search all anchor elements inside the month menu
-                fallback_option = page.locator(f".dropdown-menu a:has-text('{target_month_str}')").first
-                if fallback_option.is_visible():
-                    logging.info(f"Clicking fallback month anchor for {target_month_str}...")
-                    fallback_option.click()
-                else:
-                    logging.warning(f"Could not locate month option for '{target_month_str}'")
-
-            page.wait_for_load_state("networkidle")
-            page.wait_for_timeout(3000)
-        else:
-            logging.warning("Month dropdown button was not visible on page.")
-
-        dismiss_modals(page)
-
-    except Exception as e:
-        logging.warning(f"Error during month selection for {target_month_str}: {e}")
-
 
 
 def process_target_months(page):
@@ -233,10 +236,8 @@ def process_target_months(page):
     
     for month_label, region_rule in target_months:
         try:
-            logging.info(f"Navigating to condo portal and searching for {month_label}...")
-            
             select_month_and_search(page, month_label)
-            month_items = extract_all_pages_inventory(page)
+            month_items = extract_all_resort_cards(page, month_label)
             
             logging.info(f"Extracted {len(month_items)} items for {month_label}. Applying location filters...")
 
