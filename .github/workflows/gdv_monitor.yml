@@ -5,6 +5,8 @@ on:
     # Runs at :13 and :43 past the hour to avoid GitHub Actions queue delays
     - cron: '13,43 * * * *'
   workflow_dispatch:
+  repository_dispatch:
+    types: [trigger-gdv-monitor]
 
 jobs:
   run-monitor:
