@@ -49,13 +49,21 @@ def save_seen_items(seen_dict, filename="seen_golf_cart_ids.json"):
 
 def is_valid_cart(title):
     title_lower = title.lower()
-    if "golf" not in title_lower and "cart" not in title_lower:
+    
+    # Accept if title has both 'golf' and 'cart', OR popular golf cart brand names
+    has_cart_term = ("golf" in title_lower and "cart" in title_lower) or \
+                    any(brand in title_lower for brand in ["ezgo", "ez-go", "club car", "yamaha", "icon", "evolution"])
+    
+    if not has_cart_term:
         return False
+
+    # Exclude parts/accessories unless sold 'with charger' / 'w/ charger'
     for word in EXCLUDE_KEYWORDS:
         if f" {word}" in title_lower or f"{word}s" in title_lower or title_lower.startswith(word):
             if "with charger" in title_lower or "w/ charger" in title_lower:
                 continue
             return False
+            
     return True
 
 def send_email_notification(new_matches):
@@ -142,34 +150,55 @@ def run_scraper():
             page.goto(CL_SEARCH_URL, wait_until="networkidle", timeout=30000)
             page.wait_for_timeout(3000)
             
-            cl_items = page.locator('.cl-static-search-result, li.cl-search-result, a.main').all()
+            # Target gallery cards and result elements explicitly
+            cl_items = page.locator('.cl-search-result, .gallery-card, .cl-static-search-result').all()
             print(f"Found {len(cl_items)} raw Craigslist result items.")
 
             for item in cl_items[:30]:
                 try:
-                    text = item.inner_text().strip()
-                    href = item.get_attribute("href") or item.locator("a").get_attribute("href")
-                    
-                    lines = [line.strip() for line in text.split("\n") if line.strip()]
-                    if not href or not lines:
+                    # Locate title link specifically rather than relying on inner_text() split lines
+                    title_el = item.locator('a.title, a.cl-app-anchor, .title').first
+                    if not title_el.is_visible():
                         continue
                     
-                    title = lines[0]
+                    title = title_el.inner_text().strip()
+                    href = title_el.get_attribute("href")
+                    
+                    # Locate price specifically
+                    price_el = item.locator('.price, .priceinfo').first
+                    price = price_el.inner_text().strip() if price_el.is_visible() else "N/A"
+
+                    if not href or not title:
+                        continue
+
                     if not is_valid_cart(title):
                         continue
 
                     clean_link = href if href.startswith("http") else f"https://tampa.craigslist.org{href}"
                     item_id = f"cl_{clean_link.split('/')[-1].replace('.html', '')}"
-                    price = next((l for l in lines if "$" in l), "N/A")
 
                     if item_id not in seen_items:
                         seen_items[item_id] = price
-                        new_matches.append({"source": "Craigslist", "id": item_id, "title": title, "price": price, "link": clean_link, "status": "NEW"})
+                        new_matches.append({
+                            "source": "Craigslist", 
+                            "id": item_id, 
+                            "title": title, 
+                            "price": price, 
+                            "link": clean_link, 
+                            "status": "NEW"
+                        })
                         cl_added += 1
                     elif seen_items[item_id] != price and price != "N/A":
                         old_price = seen_items[item_id]
                         seen_items[item_id] = price
-                        new_matches.append({"source": "Craigslist", "id": item_id, "title": title, "price": f"{price} (Was {old_price})", "link": clean_link, "status": "PRICE DROP"})
+                        new_matches.append({
+                            "source": "Craigslist", 
+                            "id": item_id, 
+                            "title": title, 
+                            "price": f"{price} (Was {old_price})", 
+                            "link": clean_link, 
+                            "status": "PRICE DROP"
+                        })
                         cl_added += 1
                 except Exception as inner_e:
                     continue
