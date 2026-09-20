@@ -21,7 +21,8 @@ NEXTDOOR_SESSION_ID = os.environ.get("NEXTDOOR_SESSION_ID")
 
 EXCLUDE_KEYWORDS = [
     "charger", "cover", "enclosure", "tire", "wheel", "rim", 
-    "battery", "batteries", "windshield", "seat", "key", "part", "parts"
+    "battery", "batteries", "windshield", "seat", "key", "part", "parts",
+    "bag", "push", "pull", "caddy", "trolley", "holder", "rack"
 ]
 
 def extract_fb_id(url):
