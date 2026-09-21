@@ -257,11 +257,18 @@ def run_scraper():
             nd_added = 0
             try:
                 nd_page = context.new_page()
-                nd_page.set_extra_http_headers({"Cookie": f"sessionid={NEXTDOOR_SESSION_ID.strip()}"})
+                # Pass session ID cookie
+                nd_page.set_extra_http_headers({"Cookie": f"ndbr_at={NEXTDOOR_SESSION_ID.strip()}"})
                 
-                nd_page.goto(NEXTDOOR_SEARCH_URL, wait_until="networkidle", timeout=30000)
-                nd_page.wait_for_timeout(4000)
+                nd_page.goto(NEXTDOOR_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
+                nd_page.wait_for_timeout(3000)
 
+                # Scroll down twice to trigger dynamic feed loading
+                for _ in range(2):
+                    nd_page.evaluate("window.scrollBy(0, 1000);")
+                    nd_page.wait_for_timeout(2000)
+
+                # Locate Nextdoor listing cards
                 nd_cards = nd_page.locator('a[href*="/for_sale_and_free/"], a[href*="/post/"]').all()
                 print(f"Found {len(nd_cards)} raw Nextdoor elements.")
 
@@ -285,12 +292,26 @@ def run_scraper():
 
                         if item_id not in seen_items:
                             seen_items[item_id] = price
-                            new_matches.append({"source": "Nextdoor", "id": item_id, "title": title, "price": price, "link": clean_link, "status": "NEW"})
+                            new_matches.append({
+                                "source": "Nextdoor", 
+                                "id": item_id, 
+                                "title": title, 
+                                "price": price, 
+                                "link": clean_link, 
+                                "status": "NEW"
+                            })
                             nd_added += 1
                         elif seen_items[item_id] != price and price != "N/A":
                             old_price = seen_items[item_id]
                             seen_items[item_id] = price
-                            new_matches.append({"source": "Nextdoor", "id": item_id, "title": title, "price": f"{price} (Was {old_price})", "link": clean_link, "status": "PRICE DROP"})
+                            new_matches.append({
+                                "source": "Nextdoor", 
+                                "id": item_id, 
+                                "title": title, 
+                                "price": f"{price} (Was {old_price})", 
+                                "link": clean_link, 
+                                "status": "PRICE DROP"
+                            })
                             nd_added += 1
                     except Exception:
                         continue
