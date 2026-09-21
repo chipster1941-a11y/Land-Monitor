@@ -257,18 +257,17 @@ def run_scraper():
             nd_added = 0
             try:
                 nd_page = context.new_page()
-                # Pass session ID cookie
+                # Set cookie using ndbr_at
                 nd_page.set_extra_http_headers({"Cookie": f"ndbr_at={NEXTDOOR_SESSION_ID.strip()}"})
                 
                 nd_page.goto(NEXTDOOR_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
                 nd_page.wait_for_timeout(3000)
 
-                # Scroll down twice to trigger dynamic feed loading
+                # Scroll down to load dynamic listings
                 for _ in range(2):
                     nd_page.evaluate("window.scrollBy(0, 1000);")
                     nd_page.wait_for_timeout(2000)
 
-                # Locate Nextdoor listing cards
                 nd_cards = nd_page.locator('a[href*="/for_sale_and_free/"], a[href*="/post/"]').all()
                 print(f"Found {len(nd_cards)} raw Nextdoor elements.")
 
@@ -319,6 +318,8 @@ def run_scraper():
                 nd_page.close()
             except Exception as e:
                 print(f"Error scraping Nextdoor: {e}")
+        else:
+            print("NEXTDOOR_SESSION_ID missing. Skipping Nextdoor.")
 
         browser.close()
 

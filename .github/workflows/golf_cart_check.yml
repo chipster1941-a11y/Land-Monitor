@@ -25,7 +25,8 @@ jobs:
 
       - name: Run Golf Cart Monitor
         env:
-          EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
-          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-          EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
-        run: python golf_cart_monitor.py
+            SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
+            SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
+            RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
+            NEXTDOOR_SESSION_ID: ${{ secrets.NEXTDOOR_SESSION_ID }}
+          run: python golf_cart_monitor.py
