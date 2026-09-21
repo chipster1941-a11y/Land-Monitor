@@ -25,7 +25,8 @@ jobs:
 
       - name: Run Power Plate Monitor
         env:
-          EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
-          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-          EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
-        run: python power_plate_monitor.py
+            EMAIL_SENDER: ${{ secrets.SENDER_EMAIL }}
+            EMAIL_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
+            EMAIL_RECEIVER: ${{ secrets.RECIPIENT_EMAIL }}
+            NEXTDOOR_SESSION_ID: ${{ secrets.NEXTDOOR_SESSION_ID }}
+          run: python power_plate_monitor.py

@@ -40,11 +40,29 @@ TARGET_KEYWORDS = [
     "my3",
     "personal power plate",
 ]
+# Keywords for validating relevancy
+TARGET_KEYWORDS = [
+    "power plate",
+    "powerplate",
+    "my7",
+    "my5",
+    "my3",
+    "personal power plate",
+]
+
+# Keywords to exclude unwanted items (camera battery plates, off-brand gear, etc.)
+EXCLUDE_KEYWORDS = ["battery", "v-mount", "v mount", "camera", "smallrig", "merach"]
 
 
 def is_valid_power_plate(title):
-    """Filters out irrelevant items and ensures target keywords are present."""
+    """Filters for genuine Power Plate products while excluding camera accessories and off-brands."""
     title_clean = title.lower()
+    
+    # 1. Skip if any exclusion keyword is present
+    if any(ex in title_clean for ex in EXCLUDE_KEYWORDS):
+        return False
+        
+    # 2. Require at least one target keyword
     return any(keyword in title_clean for keyword in TARGET_KEYWORDS)
 
 
