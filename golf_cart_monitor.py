@@ -8,6 +8,21 @@ from email.mime.multipart import MIMEMultipart
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
+# --- ENVIRONMENT VARIABLES & CONFIGURATION ---
+SENDER_EMAIL = os.environ.get("SENDER_EMAIL")
+SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD")
+RECIPIENT_EMAIL = (
+    os.environ.get("RECEIVER_EMAIL")
+    or os.environ.get("RECIPIENT_EMAIL")
+    or os.environ.get("EMAIL_RECEIVER")
+)
+NEXTDOOR_SESSION_ID = os.environ.get("NEXTDOOR_SESSION_ID")
+
+# Temporary Debug Lines (Put them right here):
+print(f"DEBUG: SENDER_EMAIL present: {bool(SENDER_EMAIL)}")
+print(f"DEBUG: SENDER_PASSWORD present: {bool(SENDER_PASSWORD)}")
+print(f"DEBUG: RECIPIENT_EMAIL present: {bool(RECIPIENT_EMAIL)}")
+
 # Search URLs for Tampa, FL Region
 FB_SEARCH_URL = "https://www.facebook.com/marketplace/tampa/search?query=golf%20cart&exact=false"
 CL_SEARCH_URL = "https://tampa.craigslist.org/search/sss?query=golf+cart#search=1~gallery~0~0"
