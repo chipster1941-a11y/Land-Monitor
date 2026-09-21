@@ -18,11 +18,6 @@ RECIPIENT_EMAIL = (
 )
 NEXTDOOR_SESSION_ID = os.environ.get("NEXTDOOR_SESSION_ID")
 
-# Temporary Debug Lines (Put them right here):
-print(f"DEBUG: SENDER_EMAIL present: {bool(SENDER_EMAIL)}")
-print(f"DEBUG: SENDER_PASSWORD present: {bool(SENDER_PASSWORD)}")
-print(f"DEBUG: RECIPIENT_EMAIL present: {bool(RECIPIENT_EMAIL)}")
-
 # Search URLs for Tampa, FL Region
 FB_SEARCH_URL = "https://www.facebook.com/marketplace/tampa/search?query=golf%20cart&exact=false"
 CL_SEARCH_URL = "https://tampa.craigslist.org/search/sss?query=golf+cart#search=1~gallery~0~0"
