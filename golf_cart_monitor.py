@@ -16,7 +16,7 @@ NEXTDOOR_SEARCH_URL = "https://nextdoor.com/search/?query=golf%20cart"
 # Email & Session Configuration
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL") or os.environ.get("EMAIL_SENDER")
 SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD") or os.environ.get("EMAIL_PASSWORD")
-RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL") or os.environ.get("EMAIL_RECEIVER")
+RECIPIENT_EMAIL = os.environ.get("RECEIVER_EMAIL") or os.environ.get("EMAIL_RECEIVER")
 NEXTDOOR_SESSION_ID = os.environ.get("NEXTDOOR_SESSION_ID")
 
 EXCLUDE_KEYWORDS = [
