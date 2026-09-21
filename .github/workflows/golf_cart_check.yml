@@ -29,4 +29,4 @@ jobs:
             SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
             RECEIVER_EMAIL: ${{ secrets.RECEIVER_EMAIL }}
             NEXTDOOR_SESSION_ID: ${{ secrets.NEXTDOOR_SESSION_ID }}
-          run: python golf_cart_monitor.py
+        run: python golf_cart_monitor.py
