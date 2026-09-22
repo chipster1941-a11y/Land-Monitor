@@ -9,8 +9,8 @@ from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
 # --- ENVIRONMENT VARIABLES & CONFIGURATION ---
-SENDER_EMAIL = os.environ.get("SENDER_EMAIL")
-SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD")
+SENDER_EMAIL = os.environ.get("SENDER_EMAIL") or os.environ.get("EMAIL_SENDER")
+SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD") or os.environ.get("EMAIL_PASSWORD")
 RECIPIENT_EMAIL = (
     os.environ.get("RECEIVER_EMAIL")
     or os.environ.get("RECIPIENT_EMAIL")
@@ -23,17 +23,22 @@ FB_SEARCH_URL = "https://www.facebook.com/marketplace/tampa/search?query=golf%20
 CL_SEARCH_URL = "https://tampa.craigslist.org/search/sss?query=golf+cart#search=1~gallery~0~0"
 NEXTDOOR_SEARCH_URL = "https://nextdoor.com/search/?query=golf%20cart"
 
-# Email & Session Configuration
-SENDER_EMAIL = os.environ.get("SENDER_EMAIL") or os.environ.get("EMAIL_SENDER")
-SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD") or os.environ.get("EMAIL_PASSWORD")
-RECIPIENT_EMAIL = os.environ.get("RECEIVER_EMAIL") or os.environ.get("EMAIL_RECEIVER")
-NEXTDOOR_SESSION_ID = os.environ.get("NEXTDOOR_SESSION_ID")
-
 EXCLUDE_KEYWORDS = [
     "charger", "cover", "enclosure", "tire", "wheel", "rim", 
     "battery", "batteries", "windshield", "seat", "key", "part", "parts",
     "bag", "push", "pull", "caddy", "trolley", "holder", "rack"
 ]
+
+def parse_price_num(price_str):
+    """Converts a price string like '$3,500' or '3500' to a float like 3500.0. Returns None if unparseable."""
+    if not price_str or price_str == "N/A":
+        return None
+    # Strip everything except numbers and decimal points
+    cleaned = re.sub(r"[^\d.]", "", price_str)
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
 
 def extract_fb_id(url):
     """Extracts purely numerical Facebook Marketplace Item ID to prevent duplicate alerts."""
@@ -76,6 +81,48 @@ def is_valid_cart(title):
             return False
             
     return True
+
+def process_item_match(item_id, title, price, clean_link, source, seen_items, new_matches):
+    """Handles logic for determining if an item is NEW, a PRICE DROP, or ignored."""
+    new_price_num = parse_price_num(price)
+    
+    if item_id not in seen_items:
+        # Brand new item
+        seen_items[item_id] = price
+        new_matches.append({
+            "source": source,
+            "id": item_id,
+            "title": title,
+            "price": price,
+            "link": clean_link,
+            "status": "NEW"
+        })
+        return True
+    else:
+        old_price_str = seen_items[item_id]
+        old_price_num = parse_price_num(old_price_str)
+
+        # Check if there is a valid numeric comparison indicating a TRUE price drop
+        if new_price_num is not None and old_price_num is not None:
+            if new_price_num < old_price_num:
+                seen_items[item_id] = price  # Update stored price to lower price
+                new_matches.append({
+                    "source": source,
+                    "id": item_id,
+                    "title": title,
+                    "price": f"{price} (Was {old_price_str})",
+                    "link": clean_link,
+                    "status": "PRICE DROP"
+                })
+                return True
+            elif new_price_num > old_price_num:
+                # Update stored price silently if price went up, no notification
+                seen_items[item_id] = price
+        elif old_price_str != price and price != "N/A":
+            # Fallback if non-numeric string formatting changed
+            seen_items[item_id] = price
+
+    return False
 
 def send_email_notification(new_matches):
     if not SENDER_EMAIL or not SENDER_PASSWORD or not RECIPIENT_EMAIL:
@@ -161,13 +208,11 @@ def run_scraper():
             page.goto(CL_SEARCH_URL, wait_until="networkidle", timeout=30000)
             page.wait_for_timeout(3000)
             
-            # Target gallery cards and result elements explicitly
             cl_items = page.locator('.cl-search-result, .gallery-card, .cl-static-search-result').all()
             print(f"Found {len(cl_items)} raw Craigslist result items.")
 
             for item in cl_items[:30]:
                 try:
-                    # Locate title link specifically rather than relying on inner_text() split lines
                     title_el = item.locator('a.title, a.cl-app-anchor, .title').first
                     if not title_el.is_visible():
                         continue
@@ -175,43 +220,19 @@ def run_scraper():
                     title = title_el.inner_text().strip()
                     href = title_el.get_attribute("href")
                     
-                    # Locate price specifically
                     price_el = item.locator('.price, .priceinfo').first
                     price = price_el.inner_text().strip() if price_el.is_visible() else "N/A"
 
-                    if not href or not title:
-                        continue
-
-                    if not is_valid_cart(title):
+                    if not href or not title or not is_valid_cart(title):
                         continue
 
                     clean_link = href if href.startswith("http") else f"https://tampa.craigslist.org{href}"
                     item_id = f"cl_{clean_link.split('/')[-1].replace('.html', '')}"
 
-                    if item_id not in seen_items:
-                        seen_items[item_id] = price
-                        new_matches.append({
-                            "source": "Craigslist", 
-                            "id": item_id, 
-                            "title": title, 
-                            "price": price, 
-                            "link": clean_link, 
-                            "status": "NEW"
-                        })
+                    if process_item_match(item_id, title, price, clean_link, "Craigslist", seen_items, new_matches):
                         cl_added += 1
-                    elif seen_items[item_id] != price and price != "N/A":
-                        old_price = seen_items[item_id]
-                        seen_items[item_id] = price
-                        new_matches.append({
-                            "source": "Craigslist", 
-                            "id": item_id, 
-                            "title": title, 
-                            "price": f"{price} (Was {old_price})", 
-                            "link": clean_link, 
-                            "status": "PRICE DROP"
-                        })
-                        cl_added += 1
-                except Exception as inner_e:
+
+                except Exception:
                     continue
             print(f"Craigslist section added {cl_added} items to notification queue.")
         except Exception as e:
@@ -237,7 +258,6 @@ def run_scraper():
                     continue
 
                 clean_link = f"https://www.facebook.com/marketplace/item/{item_id.replace('fb_', '')}/"
-
                 card_text = [t.strip() for t in card.stripped_strings if t.strip()]
                 if not card_text:
                     continue
@@ -248,15 +268,9 @@ def run_scraper():
                 if not is_valid_cart(title):
                     continue
 
-                if item_id not in seen_items:
-                    seen_items[item_id] = price
-                    new_matches.append({"source": "Facebook", "id": item_id, "title": title, "price": price, "link": clean_link, "status": "NEW"})
+                if process_item_match(item_id, title, price, clean_link, "Facebook", seen_items, new_matches):
                     fb_added += 1
-                elif seen_items[item_id] != price and price != "N/A":
-                    old_price = seen_items[item_id]
-                    seen_items[item_id] = price
-                    new_matches.append({"source": "Facebook", "id": item_id, "title": title, "price": f"{price} (Was {old_price})", "link": clean_link, "status": "PRICE DROP"})
-                    fb_added += 1
+
             print(f"Facebook section added {fb_added} items to notification queue.")
         except Exception as e:
             print(f"Error scraping Facebook Marketplace: {e}")
@@ -267,13 +281,11 @@ def run_scraper():
             nd_added = 0
             try:
                 nd_page = context.new_page()
-                # Set cookie using ndbr_at
                 nd_page.set_extra_http_headers({"Cookie": f"ndbr_at={NEXTDOOR_SESSION_ID.strip()}"})
                 
                 nd_page.goto(NEXTDOOR_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
                 nd_page.wait_for_timeout(3000)
 
-                # Scroll down to load dynamic listings
                 for _ in range(2):
                     nd_page.evaluate("window.scrollBy(0, 1000);")
                     nd_page.wait_for_timeout(2000)
@@ -299,29 +311,9 @@ def run_scraper():
                         clean_link = href if href.startswith("http") else f"https://nextdoor.com{href.split('?')[0]}"
                         item_id = f"nd_{clean_link.split('/')[-1].strip('/')}"
 
-                        if item_id not in seen_items:
-                            seen_items[item_id] = price
-                            new_matches.append({
-                                "source": "Nextdoor", 
-                                "id": item_id, 
-                                "title": title, 
-                                "price": price, 
-                                "link": clean_link, 
-                                "status": "NEW"
-                            })
+                        if process_item_match(item_id, title, price, clean_link, "Nextdoor", seen_items, new_matches):
                             nd_added += 1
-                        elif seen_items[item_id] != price and price != "N/A":
-                            old_price = seen_items[item_id]
-                            seen_items[item_id] = price
-                            new_matches.append({
-                                "source": "Nextdoor", 
-                                "id": item_id, 
-                                "title": title, 
-                                "price": f"{price} (Was {old_price})", 
-                                "link": clean_link, 
-                                "status": "PRICE DROP"
-                            })
-                            nd_added += 1
+
                     except Exception:
                         continue
                 print(f"Nextdoor section added {nd_added} items to notification queue.")
