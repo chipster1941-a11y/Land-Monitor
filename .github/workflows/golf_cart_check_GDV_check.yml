@@ -2,8 +2,9 @@ name: Marketplace Monitors
 
 on:
   schedule:
-    - cron: '14,44 * * * *'  # Runs at :14 and :44 every hour
-  workflow_dispatch:
+    - cron: '14,44 * * * *'  # Internal GitHub scheduled runs
+  workflow_dispatch:       # Manual runs from GitHub UI/CLI
+  repository_dispatch:     # External API triggers (from cron-job.org / Cron)
 
 jobs:
   run-gdv:
