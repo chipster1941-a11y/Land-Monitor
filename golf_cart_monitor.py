@@ -327,6 +327,9 @@ def run_scraper():
 
     print(f"Scan complete. Total queue length for email dispatch: {len(new_matches)}")
 
+    print(f"DEBUG - Currently stored seen items count: {len(seen_items)}")
+    print(f"DEBUG - Matches queued for email: {new_matches}")
+    
     if new_matches:
         save_seen_items(seen_items)
         send_email_notification(new_matches)
