@@ -157,16 +157,19 @@ def select_month_and_search(page, target_month_str):
 
             # Target the lbMonth LinkButton inside rpMonth dropdown items
             month_option = page.locator(f"a[id*='lbMonth']:has-text('{target_month_str}')").first
-            
-            if month_option.count() > 0 and month_option.is_visible():
-                            logging.info(f"Clicking lbMonth LinkButton for {target_month_str}...")
-                            month_option.click()
-                
+
+            if month_option.count() > 0:
+                logging.info(f"Clicking lbMonth LinkButton for {target_month_str}...")
+                month_option.dispatch_event('click')
+                page.wait_for_load_state("networkidle")
+                page.wait_for_timeout(3000)
             else:
                 fallback_option = page.locator(f".dropdown-menu a:has-text('{target_month_str}')").first
-                if fallback_option.is_visible():
+                if fallback_option.count() > 0:
                     logging.info(f"Clicking fallback month anchor for {target_month_str}...")
-                    fallback_option.click()
+                    fallback_option.dispatch_event('click')
+                    page.wait_for_load_state("networkidle")
+                    page.wait_for_timeout(3000)
                 else:
                     logging.warning(f"Could not locate month option for '{target_month_str}'")
 
