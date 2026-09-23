@@ -157,10 +157,11 @@ def select_month_and_search(page, target_month_str):
 
             # Target the lbMonth LinkButton inside rpMonth dropdown items
             month_option = page.locator(f"a[id*='lbMonth']:has-text('{target_month_str}')").first
-
+            
             if month_option.count() > 0 and month_option.is_visible():
-                logging.info(f"Clicking lbMonth LinkButton for {target_month_str}...")
-                month_option.click()
+                            logging.info(f"Clicking lbMonth LinkButton for {target_month_str}...")
+                            month_option.click()
+                
             else:
                 fallback_option = page.locator(f".dropdown-menu a:has-text('{target_month_str}')").first
                 if fallback_option.is_visible():
