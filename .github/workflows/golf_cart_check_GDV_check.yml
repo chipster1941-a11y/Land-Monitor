@@ -1,12 +1,13 @@
-name: golf_cart_check_GDV_check
+name: Marketplace Monitors
 
 on:
   schedule:
-    - cron: '*/30 * * * *'  # Runs every 30 minutes
+    - cron: '14,44 * * * *'  # Runs at :14 and :44 every hour (offset to beat runner queues)
   workflow_dispatch:
 
 jobs:
-  run-monitor:
+  run-gdv:
+    name: Run GDV Monitor
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -25,15 +26,40 @@ jobs:
 
       - name: Run GDV Monitor
         env:
-            GDV_MEMBER_ID: ${{ secrets.GDV_MEMBER_ID }}
-            GDV_PASSWORD: ${{ secrets.GDV_PASSWORD }}
-            EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
-            EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-            EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
-        run: python gdv_inventory_monitor.py
+          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
+          SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
+          RECEIVER_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
+          NEXTDOOR_SESSION_ID: ${{ secrets.NEXTDOOR_SESSION_ID }}
+        run: python gdv_scraper.py
+
+      - name: Save updated GDV seen tracking
+        if: always()
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin main || true
+          git add seen_gdv*.json || true
+          git diff --quiet && git diff --staged --quiet || (git commit -m "auto: update gdv seen tracking [skip ci]" && git push)
+
+  run-golf-cart:
+    name: Run Golf Cart Monitor
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright beautifulsoup4 requests curl_cffi
+          playwright install chromium
 
       - name: Run Golf Cart Monitor
-        continue-on-error: true
         env:
           SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
           SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
@@ -41,10 +67,11 @@ jobs:
           NEXTDOOR_SESSION_ID: ${{ secrets.NEXTDOOR_SESSION_ID }}
         run: python golf_cart_monitor.py
 
-      - name: Save updated seen item IDs to repository
+      - name: Save updated Golf Cart seen tracking
         if: always()
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add seen_*.json || true
-          git diff --quiet && git diff --staged --quiet || (git commit -m "auto: update seen item tracking files [skip ci]" && git push)
+          git pull --rebase origin main || true
+          git add seen_golf_cart*.json || true
+          git diff --quiet && git diff --staged --quiet || (git commit -m "auto: update golf cart seen tracking [skip ci]" && git push)
