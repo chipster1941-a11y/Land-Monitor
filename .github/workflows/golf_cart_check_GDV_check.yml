@@ -1,4 +1,4 @@
-name: Marketplace Monitors
+name: golf_cart_check_GDV_check
 
 on:
   schedule:
@@ -23,7 +23,7 @@ jobs:
           pip install playwright beautifulsoup4 requests curl_cffi
           playwright install chromium
 
-      - name: Run GDV_inventory_monitor
+      - name: Run GDV Monitor
         continue-on-error: true
         env:
           SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
@@ -32,7 +32,7 @@ jobs:
           NEXTDOOR_SESSION_ID: ${{ secrets.NEXTDOOR_SESSION_ID }}
         run: python gdv_scraper.py
 
-      - name: Run Golf_Cart_Monitor
+      - name: Run Golf Cart Monitor
         continue-on-error: true
         env:
           SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
