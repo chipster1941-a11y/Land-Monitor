@@ -160,18 +160,20 @@ def select_month_and_search(page, target_month_str):
 
             if month_option.count() > 0:
                 logging.info(f"Clicking lbMonth LinkButton for {target_month_str}...")
-                month_option.dispatch_event('click')
+                
+                # Get the javascript:__doPostBack code from the href attribute
+                href = month_option.get_attribute("href")
+                
+                if href and href.startswith("javascript:"):
+                    # Execute ASP.NET __doPostBack directly in browser context
+                    page.evaluate(href.replace("javascript:", ""))
+                else:
+                    month_option.click(force=True)
+
                 page.wait_for_load_state("networkidle")
                 page.wait_for_timeout(3000)
             else:
-                fallback_option = page.locator(f".dropdown-menu a:has-text('{target_month_str}')").first
-                if fallback_option.count() > 0:
-                    logging.info(f"Clicking fallback month anchor for {target_month_str}...")
-                    fallback_option.dispatch_event('click')
-                    page.wait_for_load_state("networkidle")
-                    page.wait_for_timeout(3000)
-                else:
-                    logging.warning(f"Could not locate month option for '{target_month_str}'")
+                logging.warning(f"Could not locate month option for '{target_month_str}'")
 
             page.wait_for_load_state("networkidle")
             page.wait_for_timeout(3000)
