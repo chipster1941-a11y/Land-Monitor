@@ -140,45 +140,36 @@ def dismiss_modals(page):
 
 
 def select_month_and_search(page, target_month_str):
-    condos_url = "https://globaldiscoveryvacations.com/condos/Condos.aspx"
+    # Only navigate to the main condo search page on the FIRST run (if we aren't already there)
+    if "condo" not in page.url.lower():
+        logging.info("Initial navigation to condo portal...")
+        page.goto("https://globaldiscoveryvacations.com/members/condo_search.aspx") # Keep the exact URL your script already uses
+        page.wait_for_load_state("networkidle")
+
+    logging.info(f"Opening month dropdown for {target_month_str}...")
     
-    try:
-        logging.info(f"Navigating to condo portal and searching for {target_month_str}...")
-        page.goto(condos_url, wait_until="networkidle", timeout=30000)
-        dismiss_modals(page)
+    # Click dropdown to reveal month choices
+    dropdown = page.locator("#ddlMonth, .month-dropdown-selector").first # Keep whatever dropdown locator you currently have
+    if dropdown.count() > 0:
+        dropdown.click()
+        page.wait_for_timeout(1000)
 
-        month_btn = page.locator("button:has-text('Month'), .dropdown-toggle:has-text('Month')").first
-        month_btn.wait_for(state="visible", timeout=10000)
+    # Target the lbMonth LinkButton inside rpMonth dropdown items
+    month_option = page.locator(f"a[id*='lbMonth']:has-text('{target_month_str}')").first
 
-        if month_btn.is_visible():
-            logging.info(f"Opening month dropdown for {target_month_str}...")
-            month_btn.click()
-            page.wait_for_timeout(1000)
-
-            # Target the lbMonth LinkButton inside rpMonth dropdown items
-            month_option = page.locator(f"a[id*='lbMonth']:has-text('{target_month_str}')").first
-
-            if month_option.count() > 0:
-                logging.info(f"Clicking lbMonth LinkButton for {target_month_str}...")
-                
-                # Get the javascript:__doPostBack code from the href attribute
-                href = month_option.get_attribute("href")
-                
-                if href and href.startswith("javascript:"):
-                    # Execute ASP.NET __doPostBack directly in browser context
-                    page.evaluate(href.replace("javascript:", ""))
-                else:
-                    month_option.click(force=True)
-
-                page.wait_for_load_state("networkidle")
-                page.wait_for_timeout(3000)
-            else:
-                logging.warning(f"Could not locate month option for '{target_month_str}'")
-
-            page.wait_for_load_state("networkidle")
-            page.wait_for_timeout(3000)
+    if month_option.count() > 0:
+        logging.info(f"Clicking lbMonth LinkButton for {target_month_str}...")
+        href = month_option.get_attribute("href")
+        
+        if href and href.startswith("javascript:"):
+            page.evaluate(href.replace("javascript:", ""))
         else:
-            logging.warning("Month dropdown button was not visible on page.")
+            month_option.click(force=True)
+
+        page.wait_for_load_state("networkidle")
+        page.wait_for_timeout(3000)
+    else:
+        logging.warning(f"Could not locate month option for '{target_month_str}'")
 
         dismiss_modals(page)
 
