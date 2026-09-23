@@ -30,7 +30,7 @@ jobs:
             EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
             EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
             EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
-          run: python gdv_inventory_monitor.py
+        run: python gdv_inventory_monitor.py
 
       - name: Run Golf Cart Monitor
         continue-on-error: true
