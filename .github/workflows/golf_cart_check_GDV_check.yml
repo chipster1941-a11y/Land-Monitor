@@ -30,7 +30,7 @@ jobs:
           SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
           RECEIVER_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
           NEXTDOOR_SESSION_ID: ${{ secrets.NEXTDOOR_SESSION_ID }}
-        run: python gdv_scraper.py
+        run: python gdv_inventory_monitor.py
 
       - name: Save updated GDV seen tracking
         if: always()
