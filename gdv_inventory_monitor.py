@@ -1,160 +1,110 @@
 import os
 import json
+import time
 import logging
 import smtplib
-import re
-from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
-# Logging Configuration
+# Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-# Environment Variables (with fallback support for GitHub Actions)
-GDV_MEMBER_ID = os.getenv("GDV_MEMBER_ID") or os.getenv("GDV_USER")
-GDV_PASSWORD = os.getenv("GDV_PASSWORD") or os.getenv("GDV_PASS")
-EMAIL_SENDER = os.getenv("EMAIL_SENDER")
-EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD") or os.getenv("EMAIL_PASS")
-EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
+# Credentials & Config from Environment Variables
+GDV_MEMBER_ID = os.getenv("GDV_MEMBER_ID", "")
+GDV_PASSWORD = os.getenv("GDV_PASSWORD", "")
+SENDER_EMAIL = os.getenv("SENDER_EMAIL", os.getenv("EMAIL_SENDER", ""))
+SENDER_PASSWORD = os.getenv("SENDER_PASSWORD", os.getenv("EMAIL_PASSWORD", ""))
+RECEIVER_EMAIL = os.getenv("RECEIVER_EMAIL", os.getenv("EMAIL_RECEIVER", ""))
 
-SEEN_WEEKS_FILE = "seen_gdv_weeks.json"
-TARGET_MONTH_LABEL = "Nov 2026 - Feb 2027 (FL) | Sept 2027 (MI, VA, TN, NC) | Priority FL Regions"
+SEEN_FILE = "seen_gdv_weeks.json"
 
-PRIORITY_LOCATIONS = [
-    # Florida Keys
-    "florida keys", "key west", "key largo", "marathon", "islamorada", "big pine key",
-    # Gulf Coast / Southwest Florida
-    "sanibel", "captiva", "marco island", "naples", "fort myers", "fort myers beach", "bonita springs", "estero",
-    # Southeast Florida / Miami Metro Area
-    "miami", "miami beach", "south beach", "fort lauderdale", "ft. lauderdale", "pompano beach",
-    "hollywood", "boca raton", "delray beach", "west palm beach", "sunny isles", "key biscayne"
+TARGET_MONTHS = [
+    "November, 2026",
+    "December, 2026",
+    "January, 2027",
+    "February, 2027",
+    "September, 2027"
 ]
 
-NON_US_KEYWORDS = [
-    "dominican republic", "puerto plata", "punta cana", "mexico", "cancun", "cabo",
-    "cozumel", "playa del carmen", "aruba", "bahamas", "jamaica", "sint maarten",
-    "st. maarten", "costa rica", "belize", "canada", "barbados"
-]
-
-# Regional location matchers
-FLORIDA_PATTERNS = [r"\bflorida\b", r"\bfl\b"]
-SEPT_2027_STATES_PATTERNS = [
-    r"\bmichigan\b", r"\bmi\b",
-    r"\bvirginia\b", r"\bva\b",
-    r"\btennessee\b", r"\btn\b",
-    r"\bnorth carolina\b", r"\bnc\b"
-]
-
-
-def load_seen_weeks():
-    if os.path.exists(SEEN_WEEKS_FILE):
+def load_seen_items():
+    if os.path.exists(SEEN_FILE):
         try:
-            with open(SEEN_WEEKS_FILE, "r") as f:
-                data = json.load(f)
-                if isinstance(data, list):
-                    return set(data)
-                elif isinstance(data, dict):
-                    return set(data.keys())
+            with open(SEEN_FILE, "r") as f:
+                return set(json.load(f))
         except Exception as e:
-            logging.error(f"Error loading seen weeks: {e}")
+            logging.error(f"Error loading {SEEN_FILE}: {e}")
     return set()
 
-
-def save_seen_weeks(seen_weeks):
+def save_seen_items(seen_items):
     try:
-        with open(SEEN_WEEKS_FILE, "w") as f:
-            json.dump(sorted(list(seen_weeks)), f, indent=2)
-        logging.info("Saved updated seen weeks state.")
+        with open(SEEN_FILE, "w") as f:
+            json.dump(list(seen_items), f, indent=2)
+        logging.info(f"Saved {len(seen_items)} seen items to {SEEN_FILE}")
     except Exception as e:
-        logging.error(f"Error saving seen weeks: {e}")
+        logging.error(f"Error saving {SEEN_FILE}: {e}")
 
-
-def clean_resort_text(raw_text):
-    text = raw_text.replace("View Resort", "").replace("VIEW RESORT", "").strip()
-    return " ".join(text.split())
-
-
-def is_priority_location(text):
-    lower_text = text.lower()
-    return any(loc in lower_text for loc in PRIORITY_LOCATIONS)
-
-
-def is_us_location(text):
-    lower_text = text.lower()
-    return not any(keyword in lower_text for keyword in NON_US_KEYWORDS)
-
-
-def matches_patterns(text, patterns):
-    lower_text = text.lower()
-    return any(re.search(pat, lower_text) for pat in patterns)
-
-
-def send_email_notification(new_weeks):
-    if not EMAIL_SENDER or not EMAIL_PASSWORD or not EMAIL_RECEIVER:
-        logging.warning("Email credentials not fully set. Skipping email alert.")
+def send_email_notification(new_matches):
+    if not SENDER_EMAIL or not SENDER_PASSWORD or not RECEIVER_EMAIL:
+        logging.warning("Email credentials incomplete. Skipping email dispatch.")
         return
 
     msg = MIMEMultipart()
-    msg["From"] = EMAIL_SENDER
-    msg["To"] = EMAIL_RECEIVER
-    msg["Subject"] = f"🚨 GDV Inventory Alert: {len(new_weeks)} New Resort Listing(s) Found!"
+    msg['From'] = SENDER_EMAIL
+    msg['To'] = RECEIVER_EMAIL
+    msg['Subject'] = f"GDV Monitor Alert: {len(new_matches)} New Resort Listings Found!"
 
-    body_text = f"Global Discovery Vacations - New Inventory Alert\n"
-    body_text += f"{'=' * 50}\n"
-    body_text += f"Filter Mode: {TARGET_MONTH_LABEL}\n"
-    body_text += f"Total New Listings Found: {len(new_weeks)}\n\n"
-    
-    for idx, item in enumerate(new_weeks, start=1):
-        priority_tag = " [PRIORITY LOCATION MATCH]" if item.get("is_priority") else ""
-        body_text += f"{idx}. {item['clean_title']}{priority_tag}\n"
-        body_text += f"   --------------------------------------------------\n"
+    body = "New GDV Condo Inventory Matches Found:\n\n"
+    for item in new_matches:
+        body += f"- {item.get('title', 'Unknown Title')}\n"
+        body += f"  Month: {item.get('month', 'N/A')}\n"
+        body += f"  Details: {item.get('details', 'N/A')}\n"
+        body += f"  Link: {item.get('link', 'N/A')}\n\n"
 
-    body_text += "\nLog into GDV Member Portal to view details: https://globaldiscoveryvacations.com/members.aspx\n"
-
-    msg.attach(MIMEText(body_text, "plain"))
+    msg.attach(MIMEText(body, 'plain'))
 
     try:
-        server = smtplib.SMTP("smtp.gmail.com", 587)
+        server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls()
-        server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-        server.sendmail(EMAIL_SENDER, EMAIL_RECEIVER, msg.as_string())
+        server.login(SENDER_EMAIL, SENDER_PASSWORD)
+        server.send_message(msg)
         server.quit()
-        logging.info("Formatted email notification sent successfully!")
+        logging.info("Successfully sent email notification.")
     except Exception as e:
-        logging.error(f"Failed to send email: {e}")
+        logging.error(f"Failed to send email notification: {e}")
 
+def login_gdv(page):
+    logging.info("Navigating to GDV Member Portal...")
+    page.goto("https://globaldiscoveryvacations.com/login.aspx")
+    page.wait_for_load_state("networkidle")
 
-def dismiss_modals(page):
-    try:
-        page.evaluate("""
-            () => {
-                const backdrops = document.querySelectorAll('.modal-backdrop, .modal');
-                backdrops.forEach(el => el.remove());
-                document.body.classList.remove('modal-open');
-                document.body.style.overflow = 'auto';
-            }
-        """)
-    except Exception:
-        pass
+    # Perform login if redirected to login page
+    if "login.aspx" in page.url.lower():
+        logging.info("Submitting member login credentials...")
+        page.fill("input[id*='Username']", GDV_MEMBER_ID)
+        page.fill("input[id*='Password']", GDV_PASSWORD)
+        page.click("input[type='submit'], button[id*='Login']")
+        page.wait_for_load_state("networkidle")
 
+    logging.info(f"Member login successful! Current URL: {page.url}")
 
 def select_month_and_search(page, target_month_str):
-    # Only navigate to the main condo search page on the FIRST run (if we aren't already there)
-    if "condo" not in page.url.lower():
-        logging.info("Initial navigation to condo portal...")
-        page.goto("https://globaldiscoveryvacations.com/members/condo_search.aspx") # Keep the exact URL your script already uses
+    # Only navigate to main search page if not already on the condo/members portal
+    if "members.aspx" not in page.url.lower() and "condo" not in page.url.lower():
+        logging.info("Navigating to condo portal...")
+        page.goto("https://globaldiscoveryvacations.com/members.aspx")
         page.wait_for_load_state("networkidle")
 
     logging.info(f"Opening month dropdown for {target_month_str}...")
     
-    # Click dropdown to reveal month choices
-    dropdown = page.locator("#ddlMonth, .month-dropdown-selector").first # Keep whatever dropdown locator you currently have
-    if dropdown.count() > 0:
+    # Open month dropdown
+    dropdown = page.locator("a:has-text('Select Month'), .dropdown-toggle, #ddlMonth").first
+    if dropdown.count() > 0 and dropdown.is_visible():
         dropdown.click()
         page.wait_for_timeout(1000)
 
-    # Target the lbMonth LinkButton inside rpMonth dropdown items
+    # Locate the lbMonth LinkButton for the target month
     month_option = page.locator(f"a[id*='lbMonth']:has-text('{target_month_str}')").first
 
     if month_option.count() > 0:
@@ -162,6 +112,7 @@ def select_month_and_search(page, target_month_str):
         href = month_option.get_attribute("href")
         
         if href and href.startswith("javascript:"):
+            # Execute ASP.NET __doPostBack directly in browser context
             page.evaluate(href.replace("javascript:", ""))
         else:
             month_option.click(force=True)
@@ -171,175 +122,80 @@ def select_month_and_search(page, target_month_str):
     else:
         logging.warning(f"Could not locate month option for '{target_month_str}'")
 
-        dismiss_modals(page)
+def extract_resort_cards(page, month_label):
+    logging.info(f"Extracting resort cards for {month_label}...")
+    html = page.content()
+    soup = BeautifulSoup(html, "html.parser")
 
-    except Exception as e:
-        logging.warning(f"Error during month selection for {target_month_str}: {e}")
+    items = []
+    # Query for resort cards/containers
+    cards = soup.select(".resort-card, .resortItem, .condo-listing")
+    
+    if not cards:
+        # Fallback card locator if container classes differ
+        cards = soup.select("div[id*='Resort'], div[class*='resort']")
 
-
-def extract_all_resort_cards(page, month_label):
-    """Iterates through all pagination pages for a given month search."""
-    all_parsed_items = []
-    page_num = 1
-    max_pages = 5
-
-    while page_num <= max_pages:
-        logging.info(f"Extracting resort cards from Page {page_num} for {month_label}...")
+    for idx, card in enumerate(cards):
+        title_el = card.select_one(".resort-name, .title, h3, h4, a[id*='lbResort']")
+        title = title_el.get_text(strip=True) if title_el else f"Resort Listing #{idx+1}"
         
-        view_resort_links = page.locator("a:has-text('View Resort')")
-        link_count = view_resort_links.count()
+        link_el = card.select_one("a[href]")
+        link = link_el["href"] if link_el else page.url
 
-        if link_count > 0:
-            for i in range(link_count):
-                try:
-                    container = view_resort_links.nth(i).locator(
-                        "xpath=ancestor::div[contains(@class, 'col-') or contains(@class, 'card') or contains(@class, 'item') or contains(@class, 'resort')][1]"
-                    )
-                    if container.count() == 0:
-                        container = view_resort_links.nth(i).locator("xpath=..")
+        details_el = card.select_one(".details, .location, .description")
+        details = details_el.get_text(strip=True) if details_el else "N/A"
 
-                    card_text = container.inner_text().strip()
-                    cleaned = clean_resort_text(card_text)
-                    if len(cleaned) > 10 and cleaned not in all_parsed_items:
-                        all_parsed_items.append(cleaned)
-                except Exception as e:
-                    logging.warning(f"Error extracting card on page {page_num}: {e}")
+        # Unique key identifier for state tracking
+        item_id = f"{month_label}_{title}"
 
-        next_button = page.locator("a:has-text('Next'), .pagination a:has-text('>'), li.next a, a[aria-label='Next']").first
-        if next_button.count() > 0 and next_button.is_visible():
-            logging.info(f"Clicking Next page control (Page {page_num + 1})...")
-            next_button.click(force=True)
-            page.wait_for_timeout(3000)
-            dismiss_modals(page)
-            page_num += 1
-        else:
-            logging.info(f"No further pagination pages found after Page {page_num}.")
-            break
+        items.append({
+            "id": item_id,
+            "title": title,
+            "month": month_label,
+            "details": details,
+            "link": link
+        })
 
-    return all_parsed_items
+    logging.info(f"Extracted {len(items)} items for {month_label}.")
+    return items
 
-
-def process_target_months(page):
-    """Navigates to GDV Condo search, applies target dates, and extracts inventory."""
-    target_months = [
-        ("November, 2026", "fl_only"),
-        ("December, 2026", "fl_only"),
-        ("January, 2027", "fl_only"),
-        ("February, 2027", "fl_only"),
-        ("September, 2027", "sept_2027_states")
-    ]
-    
-    combined_items = []
-    
-    for month_label, region_rule in target_months:
-        try:
-            select_month_and_search(page, month_label)
-            month_items = extract_all_resort_cards(page, month_label)
-            
-            logging.info(f"Extracted {len(month_items)} items for {month_label}. Applying location filters...")
-
-            for item_text in month_items:
-                # 1. Block international listings
-                if not is_us_location(item_text):
-                    continue
-
-                has_priority_loc = is_priority_location(item_text)
-
-                # 2. Priority locations bypass standard state limits
-                if has_priority_loc:
-                    combined_items.append({"text": item_text, "is_priority": True})
-                    continue
-
-                # 3. Apply state restrictions based on target month rules
-                if region_rule == "fl_only":
-                    if matches_patterns(item_text, FLORIDA_PATTERNS):
-                        combined_items.append({"text": item_text, "is_priority": False})
-                elif region_rule == "sept_2027_states":
-                    if matches_patterns(item_text, SEPT_2027_STATES_PATTERNS):
-                        combined_items.append({"text": item_text, "is_priority": False})
-
-        except Exception as e:
-            logging.error(f"Error executing extraction for {month_label}: {e}")
-
-    return combined_items
-
-
-def run_gdv_scrape():
-    if not GDV_MEMBER_ID or not GDV_PASSWORD:
-        logging.error("GDV credentials missing from environment variables.")
-        return
-
-    seen_weeks = load_seen_weeks()
-    new_weeks = []
+def run_scraper():
+    seen_items = load_seen_items()
+    new_matches = []
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         context = browser.new_context(viewport={"width": 1280, "height": 800})
         page = context.new_page()
 
-        # 1. Login
-        logging.info("Navigating to GDV Member Portal...")
-        page.goto("https://globaldiscoveryvacations.com/login.aspx", wait_until="networkidle", timeout=60000)
-
-        clean_member_id = GDV_MEMBER_ID.strip().strip("'\"") if GDV_MEMBER_ID else ""
-        clean_password = GDV_PASSWORD.strip().strip("'\"") if GDV_PASSWORD else ""
-
-        page.wait_for_timeout(3000)
-
-        user_input = None
-        pass_input = None
-
-        frames_to_check = [page] + page.frames
-        for frame in frames_to_check:
-            txt_loc = frame.locator("input[type='text'], input[type='email'], input:not([type])").filter(has_not_text="")
-            pwd_loc = frame.locator("input[type='password']")
-
-            if txt_loc.count() > 0 and pwd_loc.count() > 0:
-                user_input = txt_loc.first
-                pass_input = pwd_loc.first
-                break
-
-        if not user_input or not pass_input:
-            raise Exception("Could not locate username/password fields.")
-
-        user_input.fill(clean_member_id)
-        pass_input.fill(clean_password)
-
         try:
-            with page.expect_navigation(timeout=20000):
-                pass_input.press("Enter")
-        except Exception:
-            page.wait_for_timeout(5000)
+            login_gdv(page)
 
-        logging.info(f"Member login successful! Current URL: {page.url}")
-        dismiss_modals(page)
+            for month_label in TARGET_MONTHS:
+                try:
+                    select_month_and_search(page, month_label)
+                    month_items = extract_resort_cards(page, month_label)
 
-        # 2. Extract listings across target months with rules
-        filtered_items = process_target_months(page)
-        logging.info(f"Successfully filtered to {len(filtered_items)} matching resort listings across all criteria.")
+                    for item in month_items:
+                        if item["id"] not in seen_items:
+                            seen_items.add(item["id"])
+                            new_matches.append(item)
 
-        # 3. Deduplicate against seen weeks
-        for item in filtered_items:
-            item_text = item["text"]
-            item_id = item_text[:100]
+                except Exception as e:
+                    logging.error(f"Error processing month {month_label}: {e}")
 
-            if item_id not in seen_weeks:
-                seen_weeks.add(item_id)
-                new_weeks.append({
-                    "clean_title": item_text,
-                    "dates": TARGET_MONTH_LABEL,
-                    "is_priority": item["is_priority"]
-                })
+        except Exception as e:
+            logging.error(f"Global scraping error: {e}")
+        finally:
+            browser.close()
 
-        browser.close()
+    logging.info(f"Scan complete. Total queue length for email dispatch: {len(new_matches)}")
 
-    if new_weeks:
-        logging.info(f"Found {len(new_weeks)} new GDV listings matching criteria!")
-        send_email_notification(new_weeks)
-        save_seen_weeks(seen_weeks)
+    if new_matches:
+        save_seen_items(seen_items)
+        send_email_notification(new_matches)
     else:
-        logging.info("No new matching GDV inventory found.")
-
+        logging.info("No new listings found on this run.")
 
 if __name__ == "__main__":
-    run_gdv_scrape()
+    run_scraper()
