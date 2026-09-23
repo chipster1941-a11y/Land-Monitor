@@ -24,13 +24,13 @@ jobs:
           playwright install chromium
 
       - name: Run GDV Monitor
-        continue-on-error: true
         env:
-          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
-          SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
-          RECEIVER_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
-          NEXTDOOR_SESSION_ID: ${{ secrets.NEXTDOOR_SESSION_ID }}
-        run: python gdv_inventory_monitor.py
+            GDV_MEMBER_ID: ${{ secrets.GDV_MEMBER_ID }}
+            GDV_PASSWORD: ${{ secrets.GDV_PASSWORD }}
+            EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
+            EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+            EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
+          run: python gdv_inventory_monitor.py
 
       - name: Run Golf Cart Monitor
         continue-on-error: true
