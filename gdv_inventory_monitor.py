@@ -281,8 +281,8 @@ def extract_all_resort_cards(page, month_label):
 
 def extract_all_resort_cards(page, month_label):
     """
-    Extracts resort listing cards across all available pagination pages
-    for the selected month, with DOM structure logging on failure.
+    Extracts individual resort listing cards with detailed info across all available
+    pagination pages for the selected month.
     """
     extracted_cards = []
     current_page = 1
@@ -292,47 +292,33 @@ def extract_all_resort_cards(page, month_label):
 
         page.wait_for_timeout(1500)
 
-        # 1. Primary selectors (cards, panels, grid rows, items)
+        # Target specific resort card elements rather than high-level region containers
+        # Look for containers that have resort title links or details buttons inside them
         card_locators = page.locator(
-            ".condo-item, .resort-card, .resort-item, [id*='pnlResort'], "
-            "[id*='rpCondos'] > div, [id*='rpMonth'] > div, "
-            "tr[id*='Row'], div[class*='col-']"
+            "div.panel:has(a), div.card:has(a), .resort-card, .condo-item, "
+            "div[id*='pnlResort'], tr[id*='rpCondos'], div[id*='rpCondos'] > div"
         )
+        
+        # If the specific card wrapper selector is empty, anchor on the resort detail links directly
+        if card_locators.count() == 0:
+            detail_links = page.locator(
+                "a[id*='lbDetails'], a[id*='btnView'], a[id*='lnkDetails'], "
+                "a[href*='ResortDetails'], a[href*='CondoDetails'], a:has-text('View Details'), a:has-text('More Info')"
+            )
+            if detail_links.count() > 0:
+                card_locators = detail_links.locator("xpath=ancestor::div[contains(@class, 'panel') or contains(@class, 'card') or contains(@class, 'box') or contains(@class, 'item')][1]")
+
         card_count = card_locators.count()
 
-        # 2. Fallback: Find any element containing view/details links or standard text blocks
         if card_count == 0:
-            card_locators = page.locator("div, tr, li").filter(
-                has=page.locator("a, button, input[type='submit']").filter(has_text=["Details", "View", "Book", "Select", "More"])
-            )
-            card_count = card_locators.count()
-
-        # 3. Diagnostic mode: If still 0, log the main container's DOM structure
-        if card_count == 0:
-            logging.warning(f"No card elements found on Page {current_page} for {month_label}.")
-            try:
-                dom_summary = page.evaluate("""() => {
-                    const form = document.querySelector('form');
-                    if (!form) return 'No form found on page';
-                    
-                    // Collect IDs and class names of main container elements
-                    const elements = Array.from(form.querySelectorAll('div[id], table[id], ul, section'));
-                    return elements.slice(0, 15).map(el => ({
-                        tag: el.tagName,
-                        id: el.id,
-                        class: el.className,
-                        textSnippet: el.innerText ? el.innerText.substring(0, 60).replace(/\\s+/g, ' ') : ''
-                    }));
-                }""")
-                logging.info(f"DOM Structure Diagnostic for {month_label}: {dom_summary}")
-            except Exception as diag_err:
-                logging.debug(f"Could not run diagnostic: {diag_err}")
+            logging.warning(f"No detailed card elements found on Page {current_page} for {month_label}.")
             break
 
         for i in range(card_count):
             try:
                 card_text = card_locators.nth(i).inner_text().strip()
-                if card_text and 15 < len(card_text) < 4000:
+                # Filter out pure region headers (like "Florida - Panhandle") by requiring longer, rich text
+                if card_text and len(card_text) > 40 and "\n" in card_text:
                     extracted_cards.append(card_text)
             except Exception as card_err:
                 logging.warning(f"Error parsing card {i} on page {current_page}: {card_err}")
@@ -365,7 +351,7 @@ def extract_all_resort_cards(page, month_label):
             logging.info(f"No further pagination pages found after Page {current_page}.")
             break
 
-    logging.info(f"Extracted total of {len(extracted_cards)} items across {current_page} page(s) for {month_label}.")
+    logging.info(f"Extracted total of {len(extracted_cards)} detailed items across {current_page} page(s) for {month_label}.")
     return extracted_cards
 
 
