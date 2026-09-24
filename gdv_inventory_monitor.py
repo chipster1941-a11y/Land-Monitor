@@ -192,29 +192,41 @@ def select_month_and_search(page, target_month_str):
 
 def extract_all_resort_cards(page, month_label):
     """
-    Extracts all resort listing cards across all available pagination pages
-    for the selected month.
+    Extracts individual resort listing cards across all available pagination pages
+    for the selected month using relative anchor element traversal.
     """
     extracted_cards = []
     current_page = 1
-
-    # Selectors targeting individual resort card items (avoiding top-level page wrappers)
-    card_selector = ".condo-item, .resort-card, .resort-item, [id*='pnlResort'], div[id*='rpCondos_ctl'], .thumbnail"
 
     while True:
         logging.info(f"Extracting resort cards from Page {current_page} for {month_label}...")
 
         page.wait_for_timeout(1500)
 
-        card_locators = page.locator(card_selector)
+        # Step 1: Attempt standard CSS selectors
+        primary_selector = ".condo-item, .resort-card, .resort-item, [id*='pnlResort'], .thumbnail"
+        card_locators = page.locator(primary_selector)
         card_count = card_locators.count()
 
-        # Dynamic fallback to individual panel/card links if class names differ
+        # Step 2: Fallback - locate action links and resolve their closest parent card container
         if card_count == 0:
-            card_locators = page.locator(".panel, .card, div.col-md-4, div.col-sm-6").filter(
-                has=page.locator("a[id*='lbDetails'], a[id*='btnView'], a:has-text('Details'), a:has-text('View')")
+            # Match any link used by GDV to view resort details/info
+            detail_links = page.locator(
+                "a[id*='lbDetails'], a[id*='btnView'], a[id*='lnkDetails'], "
+                "a[href*='ResortDetails'], a[href*='CondoDetails'], a:has-text('View Details'), a:has-text('More Info')"
             )
-            card_count = card_locators.count()
+            link_count = detail_links.count()
+
+            if link_count > 0:
+                logging.info(f"Found {link_count} detail link anchor(s). Resolving parent card containers...")
+                # Walk up to the nearest logical card wrapper container (div/td/li)
+                card_locators = detail_links.locator("xpath=ancestor::div[contains(@class, 'panel') or contains(@class, 'card') or contains(@class, 'col') or contains(@id, 'rp') or contains(@id, 'pnl')][1]")
+                
+                # If xpath container match is tight, fallback to standard parent div
+                if card_locators.count() == 0:
+                    card_locators = detail_links.locator("xpath=ancestor::div[1]")
+                
+                card_count = card_locators.count()
 
         if card_count == 0:
             logging.warning(f"No card elements found on Page {current_page} for {month_label}.")
@@ -223,13 +235,13 @@ def extract_all_resort_cards(page, month_label):
         for i in range(card_count):
             try:
                 card_text = card_locators.nth(i).inner_text().strip()
-                if card_text and len(card_text) < 4000:
-                    # Returning plain text string to match downstream .lower() filtering
+                # Ensure we got an individual card text block rather than an empty element or whole page
+                if card_text and 15 < len(card_text) < 4000:
                     extracted_cards.append(card_text)
             except Exception as card_err:
                 logging.warning(f"Error parsing card {i} on page {current_page}: {card_err}")
 
-        # Target ASP.NET DataPager or DataList pagination links
+        # Check for ASP.NET DataPager or DataList pagination links
         next_button = page.locator(
             "a[id*='Next'], a[id*='lnkNext'], a[id*='lbNext'], "
             ".pagination a:has-text('Next'), .pagination a:has-text('>'), "
