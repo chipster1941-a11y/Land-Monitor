@@ -198,20 +198,26 @@ def extract_all_resort_cards(page, month_label):
     extracted_cards = []
     current_page = 1
 
-    # Broad selector targeting GDV card containers and ASP.NET panels
-    card_selector = ".condo-item, .resort-card, [id*='pnlResort'], .resort-item, [id*='rpCondos_ctl'], .thumbnail"
+    # Main card container selectors on GDV portal
+    card_selector = ".condo-item, .resort-card, [id*='pnlResort'], .resort-item, div[id*='rpMonth'], div[id*='rpCondos'] > div"
 
     while True:
         logging.info(f"Extracting resort cards from Page {current_page} for {month_label}...")
 
-        # Brief wait for postback DOM render without rigid wait_for_selector blocking
         page.wait_for_timeout(1500)
 
         card_locators = page.locator(card_selector)
         card_count = card_locators.count()
 
+        # Fallback check if primary selector comes up empty
         if card_count == 0:
-            logging.warning(f"No card elements found on Page {current_page} using selector: {card_selector}")
+            fallback_locators = page.locator("a[id*='lbDetails'], a[id*='btnViewResort'], .panel:has(a)")
+            if fallback_locators.count() > 0:
+                card_locators = page.locator(".panel, .card, [class*='condo']").filter(has=page.locator("a"))
+                card_count = card_locators.count()
+
+        if card_count == 0:
+            logging.warning(f"No card elements found on Page {current_page} for {month_label}.")
             break
 
         for i in range(card_count):
@@ -228,15 +234,14 @@ def extract_all_resort_cards(page, month_label):
             except Exception as card_err:
                 logging.warning(f"Error parsing card {i} on page {current_page}: {card_err}")
 
-        # Target ASP.NET DataPager or DataList pagination links
+        # Check for ASP.NET DataPager or DataList pagination links
         next_button = page.locator(
             "a[id*='Next'], a[id*='lnkNext'], a[id*='lbNext'], "
             ".pagination a:has-text('Next'), .pagination a:has-text('>'), "
-            "a[id*='DataPager']:has-text('>'), .pagination .active + li a"
+            "a[id*='DataPager']:has-text('>')"
         ).first
 
         if next_button.count() > 0 and next_button.is_visible():
-            # Check for disabled pagination state
             is_disabled = next_button.get_attribute("disabled") or "disabled" in (next_button.get_attribute("class") or "")
             if is_disabled:
                 logging.info(f"Next button disabled. Reached end of pagination at Page {current_page}.")
