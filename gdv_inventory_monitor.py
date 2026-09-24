@@ -191,45 +191,63 @@ def select_month_and_search(page, target_month_str):
 
 
 def extract_all_resort_cards(page, month_label):
-    """Iterates through all pagination pages for a given month search."""
-    all_parsed_items = []
-    page_num = 1
-    max_pages = 5
+    """
+    Extracts all resort listing cards across all available pagination pages
+    for the selected month.
+    """
+    extracted_cards = []
+    current_page = 1
 
-    while page_num <= max_pages:
-        logging.info(f"Extracting resort cards from Page {page_num} for {month_label}...")
+    while True:
+        logging.info(f"Extracting resort cards from Page {current_page} for {month_label}...")
         
-        view_resort_links = page.locator("a:has-text('View Resort')")
-        link_count = view_resort_links.count()
+        # Wait for card containers to load
+        page.wait_for_selector(".condo-item, .resort-card, [id*='pnlResort'], .resort-item", timeout=10000)
+        
+        cards = page.locator(".condo-item, .resort-card, [id*='pnlResort'], .resort-item").all()
+        
+        for card in cards:
+            try:
+                card_html = card.inner_html()
+                extracted_cards.append({
+                    "month": month_label,
+                    "html": card_html,
+                    "text": card.inner_text()
+                })
+            except Exception as card_err:
+                logging.warning(f"Error parsing card on page {current_page}: {card_err}")
 
-        if link_count > 0:
-            for i in range(link_count):
-                try:
-                    container = view_resort_links.nth(i).locator(
-                        "xpath=ancestor::div[contains(@class, 'col-') or contains(@class, 'card') or contains(@class, 'item') or contains(@class, 'resort')][1]"
-                    )
-                    if container.count() == 0:
-                        container = view_resort_links.nth(i).locator("xpath=..")
+        # Look for ASP.NET DataPager / Next Page controls
+        next_button = page.locator(
+            "a[id*='Next'], a[id*='lnkNext'], a[id*='lbNext'], "
+            ".pagination a:has-text('Next'), .pagination a:has-text('>'), "
+            "a[id*='DataPager']:has-text('>'), .pagination .active + li a"
+        ).first
 
-                    card_text = container.inner_text().strip()
-                    cleaned = clean_resort_text(card_text)
-                    if len(cleaned) > 10 and cleaned not in all_parsed_items:
-                        all_parsed_items.append(cleaned)
-                except Exception as e:
-                    logging.warning(f"Error extracting card on page {page_num}: {e}")
-
-        next_button = page.locator("a:has-text('Next'), .pagination a:has-text('>'), li.next a, a[aria-label='Next']").first
         if next_button.count() > 0 and next_button.is_visible():
-            logging.info(f"Clicking Next page control (Page {page_num + 1})...")
-            next_button.click(force=True)
-            page.wait_for_timeout(3000)
-            dismiss_modals(page)
-            page_num += 1
+            # Check if button is disabled (common in ASP.NET pagers on the last page)
+            is_disabled = next_button.get_attribute("disabled") or "disabled" in (next_button.get_attribute("class") or "")
+            if is_disabled:
+                logging.info(f"Next button disabled. Reached end of pagination at Page {current_page}.")
+                break
+
+            current_page += 1
+            logging.info(f"Navigating to Page {current_page} for {month_label}...")
+            
+            href = next_button.get_attribute("href")
+            if href and href.startswith("javascript:"):
+                page.evaluate(href.replace("javascript:", ""))
+            else:
+                next_button.click(force=True)
+
+            page.wait_for_load_state("networkidle")
+            page.wait_for_timeout(2500)
         else:
-            logging.info(f"No further pagination pages found after Page {page_num}.")
+            logging.info(f"No further pagination pages found after Page {current_page}.")
             break
 
-    return all_parsed_items
+    logging.info(f"Extracted total of {len(extracted_cards)} items across {current_page} page(s) for {month_label}.")
+    return extracted_cards
 
 
 def process_target_months(page):
