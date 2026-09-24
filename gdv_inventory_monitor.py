@@ -192,8 +192,8 @@ def select_month_and_search(page, target_month_str):
 
 def extract_all_resort_cards(page, month_label):
     """
-    Extracts individual resort listing cards across all available pagination pages
-    for the selected month using relative anchor element traversal.
+    Extracts resort listing cards across all available pagination pages
+    for the selected month, with DOM structure logging on failure.
     """
     extracted_cards = []
     current_page = 1
@@ -203,45 +203,139 @@ def extract_all_resort_cards(page, month_label):
 
         page.wait_for_timeout(1500)
 
-        # Step 1: Attempt standard CSS selectors
-        primary_selector = ".condo-item, .resort-card, .resort-item, [id*='pnlResort'], .thumbnail"
-        card_locators = page.locator(primary_selector)
+        # 1. Primary selectors (cards, panels, grid rows, items)
+        card_locators = page.locator(
+            ".condo-item, .resort-card, .resort-item, [id*='pnlResort'], "
+            "[id*='rpCondos'] > div, [id*='rpMonth'] > div, "
+            "tr[id*='Row'], div[class*='col-']"
+        )
         card_count = card_locators.count()
 
-        # Step 2: Fallback - locate action links and resolve their closest parent card container
+        # 2. Fallback: Find any element containing view/details links or standard text blocks
         if card_count == 0:
-            # Match any link used by GDV to view resort details/info
-            detail_links = page.locator(
-                "a[id*='lbDetails'], a[id*='btnView'], a[id*='lnkDetails'], "
-                "a[href*='ResortDetails'], a[href*='CondoDetails'], a:has-text('View Details'), a:has-text('More Info')"
+            card_locators = page.locator("div, tr, li").filter(
+                has=page.locator("a, button, input[type='submit']").filter(has_text=["Details", "View", "Book", "Select", "More"])
             )
-            link_count = detail_links.count()
+            card_count = card_locators.count()
 
-            if link_count > 0:
-                logging.info(f"Found {link_count} detail link anchor(s). Resolving parent card containers...")
-                # Walk up to the nearest logical card wrapper container (div/td/li)
-                card_locators = detail_links.locator("xpath=ancestor::div[contains(@class, 'panel') or contains(@class, 'card') or contains(@class, 'col') or contains(@id, 'rp') or contains(@id, 'pnl')][1]")
-                
-                # If xpath container match is tight, fallback to standard parent div
-                if card_locators.count() == 0:
-                    card_locators = detail_links.locator("xpath=ancestor::div[1]")
-                
-                card_count = card_locators.count()
-
+        # 3. Diagnostic mode: If still 0, log the main container's DOM structure
         if card_count == 0:
             logging.warning(f"No card elements found on Page {current_page} for {month_label}.")
+            try:
+                dom_summary = page.evaluate("""() => {
+                    const form = document.querySelector('form');
+                    if (!form) return 'No form found on page';
+                    
+                    // Collect IDs and class names of main container elements
+                    const elements = Array.from(form.querySelectorAll('div[id], table[id], ul, section'));
+                    return elements.slice(0, 15).map(el => ({
+                        tag: el.tagName,
+                        id: el.id,
+                        class: el.className,
+                        textSnippet: el.innerText ? el.innerText.substring(0, 60).replace(/\\s+/g, ' ') : ''
+                    }));
+                }""")
+                logging.info(f"DOM Structure Diagnostic for {month_label}: {dom_summary}")
+            except Exception as diag_err:
+                logging.debug(f"Could not run diagnostic: {diag_err}")
             break
 
         for i in range(card_count):
             try:
                 card_text = card_locators.nth(i).inner_text().strip()
-                # Ensure we got an individual card text block rather than an empty element or whole page
                 if card_text and 15 < len(card_text) < 4000:
                     extracted_cards.append(card_text)
             except Exception as card_err:
                 logging.warning(f"Error parsing card {i} on page {current_page}: {card_err}")
 
-        # Check for ASP.NET DataPager or DataList pagination links
+        # Check for pagination links
+        next_button = page.locator(
+            "a[id*='Next'], a[id*='lnkNext'], a[id*='lbNext'], "
+            ".pagination a:has-text('Next'), .pagination a:has-text('>'), "
+            "a[id*='DataPager']:has-text('>')"
+        ).first
+
+        if next_button.count() > 0 and next_button.is_visible():
+            is_disabled = next_button.get_attribute("disabled") or "disabled" in (next_button.get_attribute("class") or "")
+            if is_disabled:
+                logging.info(f"Next button disabled. Reached end of pagination at Page {current_page}.")
+                break
+
+            current_page += 1
+            logging.info(f"Navigating to Page {current_page} for {month_label}...")
+
+            href = next_button.get_attribute("href")
+            if href and href.startswith("javascript:"):
+                page.evaluate(href.replace("javascript:", ""))
+            else:
+                next_button.click(force=True)
+
+            page.wait_for_load_state("networkidle")
+            page.wait_for_timeout(2500)
+        else:
+            logging.info(f"No further pagination pages found after Page {current_page}.")
+            break
+
+    logging.info(f"Extracted total of {len(extracted_cards)} items across {current_page} page(s) for {month_label}.")
+    return extracted_cardsdef extract_all_resort_cards(page, month_label):
+    """
+    Extracts resort listing cards across all available pagination pages
+    for the selected month, with DOM structure logging on failure.
+    """
+    extracted_cards = []
+    current_page = 1
+
+    while True:
+        logging.info(f"Extracting resort cards from Page {current_page} for {month_label}...")
+
+        page.wait_for_timeout(1500)
+
+        # 1. Primary selectors (cards, panels, grid rows, items)
+        card_locators = page.locator(
+            ".condo-item, .resort-card, .resort-item, [id*='pnlResort'], "
+            "[id*='rpCondos'] > div, [id*='rpMonth'] > div, "
+            "tr[id*='Row'], div[class*='col-']"
+        )
+        card_count = card_locators.count()
+
+        # 2. Fallback: Find any element containing view/details links or standard text blocks
+        if card_count == 0:
+            card_locators = page.locator("div, tr, li").filter(
+                has=page.locator("a, button, input[type='submit']").filter(has_text=["Details", "View", "Book", "Select", "More"])
+            )
+            card_count = card_locators.count()
+
+        # 3. Diagnostic mode: If still 0, log the main container's DOM structure
+        if card_count == 0:
+            logging.warning(f"No card elements found on Page {current_page} for {month_label}.")
+            try:
+                dom_summary = page.evaluate("""() => {
+                    const form = document.querySelector('form');
+                    if (!form) return 'No form found on page';
+                    
+                    // Collect IDs and class names of main container elements
+                    const elements = Array.from(form.querySelectorAll('div[id], table[id], ul, section'));
+                    return elements.slice(0, 15).map(el => ({
+                        tag: el.tagName,
+                        id: el.id,
+                        class: el.className,
+                        textSnippet: el.innerText ? el.innerText.substring(0, 60).replace(/\\s+/g, ' ') : ''
+                    }));
+                }""")
+                logging.info(f"DOM Structure Diagnostic for {month_label}: {dom_summary}")
+            except Exception as diag_err:
+                logging.debug(f"Could not run diagnostic: {diag_err}")
+            break
+
+        for i in range(card_count):
+            try:
+                card_text = card_locators.nth(i).inner_text().strip()
+                if card_text and 15 < len(card_text) < 4000:
+                    extracted_cards.append(card_text)
+            except Exception as card_err:
+                logging.warning(f"Error parsing card {i} on page {current_page}: {card_err}")
+
+        # Check for pagination links
         next_button = page.locator(
             "a[id*='Next'], a[id*='lnkNext'], a[id*='lbNext'], "
             ".pagination a:has-text('Next'), .pagination a:has-text('>'), "
