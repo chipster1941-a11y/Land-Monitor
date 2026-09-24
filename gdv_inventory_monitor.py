@@ -198,26 +198,37 @@ def extract_all_resort_cards(page, month_label):
     extracted_cards = []
     current_page = 1
 
+    # Broad selector targeting GDV card containers and ASP.NET panels
+    card_selector = ".condo-item, .resort-card, [id*='pnlResort'], .resort-item, [id*='rpCondos_ctl'], .thumbnail"
+
     while True:
         logging.info(f"Extracting resort cards from Page {current_page} for {month_label}...")
-        
-        # Wait for card containers to load
-        page.wait_for_selector(".condo-item, .resort-card, [id*='pnlResort'], .resort-item", timeout=10000)
-        
-        cards = page.locator(".condo-item, .resort-card, [id*='pnlResort'], .resort-item").all()
-        
-        for card in cards:
+
+        # Brief wait for postback DOM render without rigid wait_for_selector blocking
+        page.wait_for_timeout(1500)
+
+        card_locators = page.locator(card_selector)
+        card_count = card_locators.count()
+
+        if card_count == 0:
+            logging.warning(f"No card elements found on Page {current_page} using selector: {card_selector}")
+            break
+
+        for i in range(card_count):
             try:
+                card = card_locators.nth(i)
                 card_html = card.inner_html()
+                card_text = card.inner_text()
+
                 extracted_cards.append({
                     "month": month_label,
                     "html": card_html,
-                    "text": card.inner_text()
+                    "text": card_text
                 })
             except Exception as card_err:
-                logging.warning(f"Error parsing card on page {current_page}: {card_err}")
+                logging.warning(f"Error parsing card {i} on page {current_page}: {card_err}")
 
-        # Look for ASP.NET DataPager / Next Page controls
+        # Target ASP.NET DataPager or DataList pagination links
         next_button = page.locator(
             "a[id*='Next'], a[id*='lnkNext'], a[id*='lbNext'], "
             ".pagination a:has-text('Next'), .pagination a:has-text('>'), "
@@ -225,7 +236,7 @@ def extract_all_resort_cards(page, month_label):
         ).first
 
         if next_button.count() > 0 and next_button.is_visible():
-            # Check if button is disabled (common in ASP.NET pagers on the last page)
+            # Check for disabled pagination state
             is_disabled = next_button.get_attribute("disabled") or "disabled" in (next_button.get_attribute("class") or "")
             if is_disabled:
                 logging.info(f"Next button disabled. Reached end of pagination at Page {current_page}.")
@@ -233,7 +244,7 @@ def extract_all_resort_cards(page, month_label):
 
             current_page += 1
             logging.info(f"Navigating to Page {current_page} for {month_label}...")
-            
+
             href = next_button.get_attribute("href")
             if href and href.startswith("javascript:"):
                 page.evaluate(href.replace("javascript:", ""))
