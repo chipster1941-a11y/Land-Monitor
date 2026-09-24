@@ -277,7 +277,9 @@ def extract_all_resort_cards(page, month_label):
             break
 
     logging.info(f"Extracted total of {len(extracted_cards)} items across {current_page} page(s) for {month_label}.")
-    return extracted_cardsdef extract_all_resort_cards(page, month_label):
+    return extracted_cards
+
+def extract_all_resort_cards(page, month_label):
     """
     Extracts resort listing cards across all available pagination pages
     for the selected month, with DOM structure logging on failure.
