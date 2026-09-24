@@ -193,31 +193,48 @@ def select_month_and_search(page, target_month_str):
 def extract_all_resort_cards(page, month_label):
     """
     Extracts all resort listing cards across all available pagination pages
-    for the selected month.
+    for the selected month, with DOM inspection fallback.
     """
     extracted_cards = []
     current_page = 1
 
-    # Main card container selectors on GDV portal
-    card_selector = ".condo-item, .resort-card, [id*='pnlResort'], .resort-item, div[id*='rpMonth'], div[id*='rpCondos'] > div"
+    # Broadened primary selectors targeting standard GDV layout elements
+    primary_selectors = [
+        ".condo-item", ".resort-card", ".resort-item",
+        "[id*='pnlResort']", "[id*='rpCondos']", "[id*='rpMonth']",
+        ".panel", ".card", ".thumbnail", "div.row > div[class*='col-']"
+    ]
+    
+    combined_selector = ", ".join(primary_selectors)
 
     while True:
         logging.info(f"Extracting resort cards from Page {current_page} for {month_label}...")
 
         page.wait_for_timeout(1500)
 
-        card_locators = page.locator(card_selector)
+        card_locators = page.locator(combined_selector)
         card_count = card_locators.count()
 
-        # Fallback check if primary selector comes up empty
+        # Fallback 1: Filter any container div/tr that contains view/details links or resort titles
         if card_count == 0:
-            fallback_locators = page.locator("a[id*='lbDetails'], a[id*='btnViewResort'], .panel:has(a)")
-            if fallback_locators.count() > 0:
-                card_locators = page.locator(".panel, .card, [class*='condo']").filter(has=page.locator("a"))
-                card_count = card_locators.count()
+            logging.info("Primary card selectors missed. Attempting dynamic content fallback...")
+            card_locators = page.locator("div, tr, li").filter(
+                has=page.locator("a[id*='lbDetails'], a[id*='btnView'], a[id*='lnkDetails'], a:has-text('Details'), a:has-text('View')")
+            )
+            card_count = card_locators.count()
 
+        # Diagnostic log if still 0 items
         if card_count == 0:
             logging.warning(f"No card elements found on Page {current_page} for {month_label}.")
+            try:
+                # Log main container ID/classes to reveal exact structure
+                body_structure = page.evaluate("""() => {
+                    const containers = Array.from(document.querySelectorAll('main, #content, .content, form, div[id*="UpdatePanel"]'));
+                    return containers.map(c => ({ id: c.id, className: c.className, childCount: c.children.length }));
+                }""")
+                logging.info(f"Page container diagnostic: {body_structure}")
+            except Exception as diag_err:
+                logging.debug(f"Could not run diagnostic: {diag_err}")
             break
 
         for i in range(card_count):
@@ -226,11 +243,13 @@ def extract_all_resort_cards(page, month_label):
                 card_html = card.inner_html()
                 card_text = card.inner_text()
 
-                extracted_cards.append({
-                    "month": month_label,
-                    "html": card_html,
-                    "text": card_text
-                })
+                # Basic validation to avoid picking up the whole page wrapper as a single card
+                if len(card_text.strip()) > 10 and len(card_text) < 5000:
+                    extracted_cards.append({
+                        "month": month_label,
+                        "html": card_html,
+                        "text": card_text
+                    })
             except Exception as card_err:
                 logging.warning(f"Error parsing card {i} on page {current_page}: {card_err}")
 
