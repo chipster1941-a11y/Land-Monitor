@@ -193,67 +193,43 @@ def select_month_and_search(page, target_month_str):
 def extract_all_resort_cards(page, month_label):
     """
     Extracts all resort listing cards across all available pagination pages
-    for the selected month, with DOM inspection fallback.
+    for the selected month.
     """
     extracted_cards = []
     current_page = 1
 
-    # Broadened primary selectors targeting standard GDV layout elements
-    primary_selectors = [
-        ".condo-item", ".resort-card", ".resort-item",
-        "[id*='pnlResort']", "[id*='rpCondos']", "[id*='rpMonth']",
-        ".panel", ".card", ".thumbnail", "div.row > div[class*='col-']"
-    ]
-    
-    combined_selector = ", ".join(primary_selectors)
+    # Selectors targeting individual resort card items (avoiding top-level page wrappers)
+    card_selector = ".condo-item, .resort-card, .resort-item, [id*='pnlResort'], div[id*='rpCondos_ctl'], .thumbnail"
 
     while True:
         logging.info(f"Extracting resort cards from Page {current_page} for {month_label}...")
 
         page.wait_for_timeout(1500)
 
-        card_locators = page.locator(combined_selector)
+        card_locators = page.locator(card_selector)
         card_count = card_locators.count()
 
-        # Fallback 1: Filter any container div/tr that contains view/details links or resort titles
+        # Dynamic fallback to individual panel/card links if class names differ
         if card_count == 0:
-            logging.info("Primary card selectors missed. Attempting dynamic content fallback...")
-            card_locators = page.locator("div, tr, li").filter(
-                has=page.locator("a[id*='lbDetails'], a[id*='btnView'], a[id*='lnkDetails'], a:has-text('Details'), a:has-text('View')")
+            card_locators = page.locator(".panel, .card, div.col-md-4, div.col-sm-6").filter(
+                has=page.locator("a[id*='lbDetails'], a[id*='btnView'], a:has-text('Details'), a:has-text('View')")
             )
             card_count = card_locators.count()
 
-        # Diagnostic log if still 0 items
         if card_count == 0:
             logging.warning(f"No card elements found on Page {current_page} for {month_label}.")
-            try:
-                # Log main container ID/classes to reveal exact structure
-                body_structure = page.evaluate("""() => {
-                    const containers = Array.from(document.querySelectorAll('main, #content, .content, form, div[id*="UpdatePanel"]'));
-                    return containers.map(c => ({ id: c.id, className: c.className, childCount: c.children.length }));
-                }""")
-                logging.info(f"Page container diagnostic: {body_structure}")
-            except Exception as diag_err:
-                logging.debug(f"Could not run diagnostic: {diag_err}")
             break
 
         for i in range(card_count):
             try:
-                card = card_locators.nth(i)
-                card_html = card.inner_html()
-                card_text = card.inner_text()
-
-                # Basic validation to avoid picking up the whole page wrapper as a single card
-                if len(card_text.strip()) > 10 and len(card_text) < 5000:
-                    extracted_cards.append({
-                        "month": month_label,
-                        "html": card_html,
-                        "text": card_text
-                    })
+                card_text = card_locators.nth(i).inner_text().strip()
+                if card_text and len(card_text) < 4000:
+                    # Returning plain text string to match downstream .lower() filtering
+                    extracted_cards.append(card_text)
             except Exception as card_err:
                 logging.warning(f"Error parsing card {i} on page {current_page}: {card_err}")
 
-        # Check for ASP.NET DataPager or DataList pagination links
+        # Target ASP.NET DataPager or DataList pagination links
         next_button = page.locator(
             "a[id*='Next'], a[id*='lnkNext'], a[id*='lbNext'], "
             ".pagination a:has-text('Next'), .pagination a:has-text('>'), "
