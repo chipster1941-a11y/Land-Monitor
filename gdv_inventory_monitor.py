@@ -140,6 +140,10 @@ def dismiss_modals(page):
 
 
 def select_month_and_search(page, target_month_str):
+    """
+    Navigates to the GDV Condos portal and triggers the ASP.NET postback
+    for the selected month dropdown option.
+    """
     condos_url = "https://globaldiscoveryvacations.com/condos/Condos.aspx"
     
     try:
@@ -161,6 +165,7 @@ def select_month_and_search(page, target_month_str):
             if month_option.count() > 0 and month_option.is_visible():
                 logging.info(f"Clicking lbMonth LinkButton for {target_month_str}...")
                 
+                # Execute __doPostBack directly if JavaScript href is present
                 href = month_option.get_attribute("href")
                 if href and href.startswith("javascript:"):
                     page.evaluate(href.replace("javascript:", ""))
@@ -173,6 +178,11 @@ def select_month_and_search(page, target_month_str):
                 logging.warning(f"Could not locate visible lbMonth link for '{target_month_str}'")
         else:
             logging.warning("Month dropdown button was not visible on page.")
+
+        dismiss_modals(page)
+
+    except Exception as e:
+        logging.warning(f"Error during month selection for {target_month_str}: {e}")
 
         dismiss_modals(page)
 
