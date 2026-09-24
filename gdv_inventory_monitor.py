@@ -143,13 +143,9 @@ def select_month_and_search(page, target_month_str):
     condos_url = "https://globaldiscoveryvacations.com/condos/Condos.aspx"
     
     try:
-        # Only navigate if we aren't already on the Condos page
-        if condos_url.lower() not in page.url.lower():
-            logging.info(f"Navigating to condo portal for {target_month_str}...")
-            page.goto(condos_url, wait_until="networkidle", timeout=30000)
-            dismiss_modals(page)
-        else:
-            logging.info(f"Already on condo portal. Selecting month {target_month_str}...")
+        logging.info(f"Navigating to condo portal for {target_month_str}...")
+        page.goto(condos_url, wait_until="networkidle", timeout=30000)
+        dismiss_modals(page)
 
         month_btn = page.locator("button:has-text('Month'), .dropdown-toggle:has-text('Month')").first
         month_btn.wait_for(state="visible", timeout=10000)
@@ -165,7 +161,6 @@ def select_month_and_search(page, target_month_str):
             if month_option.count() > 0 and month_option.is_visible():
                 logging.info(f"Clicking lbMonth LinkButton for {target_month_str}...")
                 
-                # Execute __doPostBack directly if present to prevent timeout on hidden ASP.NET controls
                 href = month_option.get_attribute("href")
                 if href and href.startswith("javascript:"):
                     page.evaluate(href.replace("javascript:", ""))
@@ -173,7 +168,7 @@ def select_month_and_search(page, target_month_str):
                     month_option.click(force=True)
 
                 page.wait_for_load_state("networkidle")
-                page.wait_for_timeout(2000)
+                page.wait_for_timeout(3000)
             else:
                 logging.warning(f"Could not locate visible lbMonth link for '{target_month_str}'")
         else:
