@@ -284,7 +284,7 @@ import re
 def extract_all_resort_cards(page, month_label):
     """
     Extracts individual resort listing cards across all available pagination pages
-    for the selected month, stripping sidebar boilerplate text.
+    for the selected month using the exact article.items container selector.
     """
     extracted_cards = []
     current_page = 1
@@ -293,11 +293,8 @@ def extract_all_resort_cards(page, month_label):
         logging.info(f"Extracting resort cards from Page {current_page} for {month_label}...")
         page.wait_for_timeout(1500)
 
-        # Proven selectors that match GDV resort card containers
-        cards = page.locator(
-            "tr[id*='Row'], div[class*='col-'], [id*='rpCondos'] > div, "
-            "[id*='pnlResort'], .resort-card, .condo-item"
-        )
+        # Target the exact article elements that wrap each resort card
+        cards = page.locator("article.items")
         card_count = cards.count()
 
         if card_count == 0:
@@ -307,10 +304,6 @@ def extract_all_resort_cards(page, month_label):
         for i in range(card_count):
             try:
                 raw_text = cards.nth(i).inner_text().strip()
-
-                # Skip the giant left sidebar container if caught
-                if "Narrow Your Search" in raw_text or "Reserve Your Vacation Condo" in raw_text:
-                    continue
 
                 # Clean lines
                 lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
@@ -323,11 +316,8 @@ def extract_all_resort_cards(page, month_label):
                 cleaned_lines = [l for l in lines if not any(p in l for p in ignore_phrases)]
                 clean_card_text = "\n".join(cleaned_lines)
 
-                # Ensure it's an actual resort card and not a generic header line
-                if clean_card_text and len(clean_card_text) > 25:
-                    # Require at least one resort-specific marker
-                    if any(key in clean_card_text for key in ["ID", "Check-In", "Avail", "Bd", "Occ", "AS LOW AS", "Check-Out"]):
-                        extracted_cards.append(clean_card_text)
+                if clean_card_text and len(clean_card_text) > 20:
+                    extracted_cards.append(clean_card_text)
 
             except Exception as card_err:
                 logging.warning(f"Error parsing card {i} on page {current_page}: {card_err}")
