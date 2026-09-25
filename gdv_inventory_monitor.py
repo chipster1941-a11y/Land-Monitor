@@ -279,38 +279,33 @@ def extract_all_resort_cards(page, month_label):
     logging.info(f"Extracted total of {len(extracted_cards)} items across {current_page} page(s) for {month_label}.")
     return extracted_cards
 
+import re
+
 def extract_all_resort_cards(page, month_label):
     """
     Extracts individual resort listing cards across all available pagination pages
-    for the selected month, filtering out region category headers.
+    for the selected month, cleaning raw DOM text into structured resort entries.
     """
     extracted_cards = []
     current_page = 1
 
     while True:
         logging.info(f"Extracting resort cards from Page {current_page} for {month_label}...")
-
         page.wait_for_timeout(1500)
 
-        # Target links/buttons inside resort listings (e.g., View Details, Book, Select, More)
+        # Target links that specifically belong to individual resort items
         detail_anchors = page.locator(
             "a[id*='lbDetails'], a[id*='btnView'], a[id*='lnkDetails'], "
-            "a[href*='Resort'], a[href*='Condo'], "
-            "a:has-text('Details'), a:has-text('View'), a:has-text('Select')"
+            "a[href*='ResortDetails'], a[href*='CondoDetails']"
         )
         
         anchor_count = detail_anchors.count()
 
         if anchor_count > 0:
-            # Walk up to the nearest logical card/row container for each detail link
-            card_locators = detail_anchors.locator("xpath=ancestor::div[contains(@class, 'panel') or contains(@class, 'card') or contains(@class, 'thumbnail') or contains(@class, 'item') or contains(@id, 'pnl')][1]")
-            
-            # If the specific container xpath doesn't catch them, grab the direct parent div
-            if card_locators.count() == 0:
-                card_locators = detail_anchors.locator("xpath=ancestor::div[1]")
+            # Step up to the immediate parent listing container
+            card_locators = detail_anchors.locator("xpath=ancestor::div[contains(@class, 'col-') or contains(@class, 'panel') or contains(@class, 'item')][1]")
         else:
-            # Fallback: standard card classes
-            card_locators = page.locator(".resort-card, .condo-item, [id*='pnlResort']")
+            card_locators = page.locator(".resort-card, .condo-item, [id*='rpCondos'] > div")
 
         card_count = card_locators.count()
 
@@ -320,34 +315,44 @@ def extract_all_resort_cards(page, month_label):
 
         for i in range(card_count):
             try:
-                card_text = card_locators.nth(i).inner_text().strip()
-                # Exclude lines that are purely region headers (no newlines or short text without dates/details)
-                if card_text and len(card_text) > 20:
-                    # Ignore pure region headers like "Florida - Northeast"
-                    if not any(card_text == region for region in [
-                        "Florida - Northeast", "Florida - Orlando Area", "Florida - Southeast",
-                        "Florida - Panhandle", "Florida - Northwest", "Virginia - Inland"
-                    ]):
-                        extracted_cards.append(card_text)
+                raw_text = card_locators.nth(i).inner_text().strip()
+
+                # Clean out sidebar and header boilerplate if caught in ancestor element
+                if "Narrow Your Search" in raw_text:
+                    raw_text = raw_text.split("SHOW")[-1] if "SHOW" in raw_text else raw_text
+
+                # Normalize lines and strip empty space
+                lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+                
+                # Filter out pure navigation/sidebar garbage
+                ignore_phrases = [
+                    "Reserve Your", "Vacation Condo", "Narrow Your Search", 
+                    "Vacation Type", "Bedrooms", "Protect Your Vacation", 
+                    "Membership Guidebook", "SORT BY", "MAP", "VIEW", "SHOW"
+                ]
+                cleaned_lines = [l for l in lines if not any(p in l for p in ignore_phrases)]
+
+                # Build clean structured summary string
+                clean_card_text = "\n".join(cleaned_lines)
+
+                if clean_card_text and len(clean_card_text) > 30:
+                    extracted_cards.append(clean_card_text)
+
             except Exception as card_err:
                 logging.warning(f"Error parsing card {i} on page {current_page}: {card_err}")
 
-        # Check for pagination links
+        # Check for pagination
         next_button = page.locator(
             "a[id*='Next'], a[id*='lnkNext'], a[id*='lbNext'], "
-            ".pagination a:has-text('Next'), .pagination a:has-text('>'), "
-            "a[id*='DataPager']:has-text('>')"
+            ".pagination a:has-text('Next'), .pagination a:has-text('>') "
         ).first
 
         if next_button.count() > 0 and next_button.is_visible():
             is_disabled = next_button.get_attribute("disabled") or "disabled" in (next_button.get_attribute("class") or "")
             if is_disabled:
-                logging.info(f"Next button disabled. Reached end of pagination at Page {current_page}.")
                 break
 
             current_page += 1
-            logging.info(f"Navigating to Page {current_page} for {month_label}...")
-
             href = next_button.get_attribute("href")
             if href and href.startswith("javascript:"):
                 page.evaluate(href.replace("javascript:", ""))
@@ -357,7 +362,6 @@ def extract_all_resort_cards(page, month_label):
             page.wait_for_load_state("networkidle")
             page.wait_for_timeout(2500)
         else:
-            logging.info(f"No further pagination pages found after Page {current_page}.")
             break
 
     logging.info(f"Extracted total of {len(extracted_cards)} items across {current_page} page(s) for {month_label}.")
