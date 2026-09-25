@@ -284,7 +284,7 @@ import re
 def extract_all_resort_cards(page, month_label):
     """
     Extracts individual resort listing cards across all available pagination pages
-    for the selected month, cleaning raw DOM text into structured resort entries.
+    for the selected month, isolating individual items and stripping boilerplate text.
     """
     extracted_cards = []
     current_page = 1
@@ -293,58 +293,58 @@ def extract_all_resort_cards(page, month_label):
         logging.info(f"Extracting resort cards from Page {current_page} for {month_label}...")
         page.wait_for_timeout(1500)
 
-        # Target links that specifically belong to individual resort items
-        detail_anchors = page.locator(
-            "a[id*='lbDetails'], a[id*='btnView'], a[id*='lnkDetails'], "
-            "a[href*='ResortDetails'], a[href*='CondoDetails']"
+        # Target individual card/row containers directly (avoid broad top-level wrapper divs)
+        cards = page.locator(
+            "[id*='rpCondos'] > div, [id*='pnlResort'], .resort-card, .condo-item, tr[id*='Row']"
         )
-        
-        anchor_count = detail_anchors.count()
+        card_count = cards.count()
 
-        if anchor_count > 0:
-            # Step up to the immediate parent listing container
-            card_locators = detail_anchors.locator("xpath=ancestor::div[contains(@class, 'col-') or contains(@class, 'panel') or contains(@class, 'item')][1]")
-        else:
-            card_locators = page.locator(".resort-card, .condo-item, [id*='rpCondos'] > div")
-
-        card_count = card_locators.count()
+        # Fallback: find standard item columns inside the inventory grid
+        if card_count == 0:
+            cards = page.locator("div.panel, div.thumbnail, div.card").filter(
+                has=page.locator("a[id*='Details'], a[id*='View'], a[href*='Resort'], a[href*='Condo']")
+            )
+            card_count = cards.count()
 
         if card_count == 0:
             logging.warning(f"No card elements found on Page {current_page} for {month_label}.")
             break
 
+        logging.info(f"Found {card_count} individual card container(s) on Page {current_page}.")
+
         for i in range(card_count):
             try:
-                raw_text = card_locators.nth(i).inner_text().strip()
+                raw_text = cards.nth(i).inner_text().strip()
 
-                # Clean out sidebar and header boilerplate if caught in ancestor element
-                if "Narrow Your Search" in raw_text:
-                    raw_text = raw_text.split("SHOW")[-1] if "SHOW" in raw_text else raw_text
+                # Ignore top-level page headers/sidebars if caught in fallback
+                if "Narrow Your Search" in raw_text or "Reserve Your Vacation Condo" in raw_text:
+                    continue
 
-                # Normalize lines and strip empty space
+                # Strip out excess whitespace and clean individual lines
                 lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
-                
-                # Filter out pure navigation/sidebar garbage
+
+                # Filter out pure navigation & layout controls
                 ignore_phrases = [
-                    "Reserve Your", "Vacation Condo", "Narrow Your Search", 
-                    "Vacation Type", "Bedrooms", "Protect Your Vacation", 
+                    "Reserve Your", "Vacation Condo", "Narrow Your Search",
+                    "Vacation Type", "Bedrooms", "Protect Your Vacation",
                     "Membership Guidebook", "SORT BY", "MAP", "VIEW", "SHOW"
                 ]
                 cleaned_lines = [l for l in lines if not any(p in l for p in ignore_phrases)]
 
-                # Build clean structured summary string
                 clean_card_text = "\n".join(cleaned_lines)
 
+                # Ensure it's a real resort listing with details (ID, Check-in, or Unit Size)
                 if clean_card_text and len(clean_card_text) > 30:
-                    extracted_cards.append(clean_card_text)
+                    if any(key in clean_card_text for key in ["ID", "Check-In", "Avail", "Bd", "Occ", "AS LOW AS"]):
+                        extracted_cards.append(clean_card_text)
 
             except Exception as card_err:
                 logging.warning(f"Error parsing card {i} on page {current_page}: {card_err}")
 
-        # Check for pagination
+        # Check for pagination next button
         next_button = page.locator(
             "a[id*='Next'], a[id*='lnkNext'], a[id*='lbNext'], "
-            ".pagination a:has-text('Next'), .pagination a:has-text('>') "
+            ".pagination a:has-text('Next'), .pagination a:has-text('>')"
         ).first
 
         if next_button.count() > 0 and next_button.is_visible():
@@ -353,6 +353,8 @@ def extract_all_resort_cards(page, month_label):
                 break
 
             current_page += 1
+            logging.info(f"Navigating to Page {current_page} for {month_label}...")
+
             href = next_button.get_attribute("href")
             if href and href.startswith("javascript:"):
                 page.evaluate(href.replace("javascript:", ""))
