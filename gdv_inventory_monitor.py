@@ -102,12 +102,19 @@ def send_email_notification(new_weeks):
 
     body_text = f"Global Discovery Vacations - New Inventory Alert\n"
     body_text += f"{'=' * 50}\n"
-    body_text += f"Filter Mode: {TARGET_MONTH_LABEL}\n"
+    body_text += f"Filter Mode: Nov 2026 - Feb 2027 (FL) | Sept 2027 (MI, VA, TN, NC) | Priority FL Regions\n"
     body_text += f"Total New Listings Found: {len(new_weeks)}\n\n"
-    
+
     for idx, item in enumerate(new_weeks, start=1):
+        # Extract the full text content if available, falling back to clean_title
+        card_content = item.get("raw_text") or item.get("clean_title") or str(item)
+        
+        # Collapse multi-line card text into a single space-separated line
+        single_line_text = " ".join(card_content.splitlines()).strip()
+        
         priority_tag = " [PRIORITY LOCATION MATCH]" if item.get("is_priority") else ""
-        body_text += f"{idx}. {item['clean_title']}{priority_tag}\n"
+        
+        body_text += f"{idx}. {single_line_text}{priority_tag}\n"
         body_text += f"   --------------------------------------------------\n"
 
     body_text += "\nLog into GDV Member Portal to view details: https://globaldiscoveryvacations.com/members.aspx\n"
