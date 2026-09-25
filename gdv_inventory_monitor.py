@@ -282,7 +282,7 @@ def extract_all_resort_cards(page, month_label):
 def extract_all_resort_cards(page, month_label):
     """
     Extracts individual resort listing cards across all available pagination pages
-    for the selected month.
+    for the selected month, filtering out region category headers.
     """
     extracted_cards = []
     current_page = 1
@@ -292,21 +292,27 @@ def extract_all_resort_cards(page, month_label):
 
         page.wait_for_timeout(1500)
 
-        # Revert to the exact container selectors that successfully matched on GDV
-        card_locators = page.locator(
-            "tr[id*='Row'], div[class*='col-'], .condo-item, .resort-card, "
-            "[id*='pnlResort'], [id*='rpCondos'] > div, div.panel, div.card"
+        # Target links/buttons inside resort listings (e.g., View Details, Book, Select, More)
+        detail_anchors = page.locator(
+            "a[id*='lbDetails'], a[id*='btnView'], a[id*='lnkDetails'], "
+            "a[href*='Resort'], a[href*='Condo'], "
+            "a:has-text('Details'), a:has-text('View'), a:has-text('Select')"
         )
         
-        card_count = card_locators.count()
+        anchor_count = detail_anchors.count()
 
-        # Fallback to anchor elements if primary containers aren't matched directly
-        if card_count == 0:
-            card_locators = page.locator(
-                "a[id*='lbDetails'], a[id*='btnView'], a[id*='lnkDetails'], "
-                "a[href*='ResortDetails'], a[href*='CondoDetails']"
-            ).locator("xpath=ancestor::div[1]")
-            card_count = card_locators.count()
+        if anchor_count > 0:
+            # Walk up to the nearest logical card/row container for each detail link
+            card_locators = detail_anchors.locator("xpath=ancestor::div[contains(@class, 'panel') or contains(@class, 'card') or contains(@class, 'thumbnail') or contains(@class, 'item') or contains(@id, 'pnl')][1]")
+            
+            # If the specific container xpath doesn't catch them, grab the direct parent div
+            if card_locators.count() == 0:
+                card_locators = detail_anchors.locator("xpath=ancestor::div[1]")
+        else:
+            # Fallback: standard card classes
+            card_locators = page.locator(".resort-card, .condo-item, [id*='pnlResort']")
+
+        card_count = card_locators.count()
 
         if card_count == 0:
             logging.warning(f"No card elements found on Page {current_page} for {month_label}.")
@@ -315,9 +321,14 @@ def extract_all_resort_cards(page, month_label):
         for i in range(card_count):
             try:
                 card_text = card_locators.nth(i).inner_text().strip()
-                # Accept non-empty card text blocks that contain actual content
-                if card_text and len(card_text) > 15:
-                    extracted_cards.append(card_text)
+                # Exclude lines that are purely region headers (no newlines or short text without dates/details)
+                if card_text and len(card_text) > 20:
+                    # Ignore pure region headers like "Florida - Northeast"
+                    if not any(card_text == region for region in [
+                        "Florida - Northeast", "Florida - Orlando Area", "Florida - Southeast",
+                        "Florida - Panhandle", "Florida - Northwest", "Virginia - Inland"
+                    ]):
+                        extracted_cards.append(card_text)
             except Exception as card_err:
                 logging.warning(f"Error parsing card {i} on page {current_page}: {card_err}")
 
