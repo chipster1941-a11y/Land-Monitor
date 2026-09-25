@@ -284,7 +284,7 @@ import re
 def extract_all_resort_cards(page, month_label):
     """
     Extracts individual resort listing cards across all available pagination pages
-    for the selected month, isolating individual items and stripping boilerplate text.
+    for the selected month, stripping sidebar boilerplate text.
     """
     extracted_cards = []
     current_page = 1
@@ -293,49 +293,40 @@ def extract_all_resort_cards(page, month_label):
         logging.info(f"Extracting resort cards from Page {current_page} for {month_label}...")
         page.wait_for_timeout(1500)
 
-        # Target individual card/row containers directly (avoid broad top-level wrapper divs)
+        # Proven selectors that match GDV resort card containers
         cards = page.locator(
-            "[id*='rpCondos'] > div, [id*='pnlResort'], .resort-card, .condo-item, tr[id*='Row']"
+            "tr[id*='Row'], div[class*='col-'], [id*='rpCondos'] > div, "
+            "[id*='pnlResort'], .resort-card, .condo-item"
         )
         card_count = cards.count()
-
-        # Fallback: find standard item columns inside the inventory grid
-        if card_count == 0:
-            cards = page.locator("div.panel, div.thumbnail, div.card").filter(
-                has=page.locator("a[id*='Details'], a[id*='View'], a[href*='Resort'], a[href*='Condo']")
-            )
-            card_count = cards.count()
 
         if card_count == 0:
             logging.warning(f"No card elements found on Page {current_page} for {month_label}.")
             break
 
-        logging.info(f"Found {card_count} individual card container(s) on Page {current_page}.")
-
         for i in range(card_count):
             try:
                 raw_text = cards.nth(i).inner_text().strip()
 
-                # Ignore top-level page headers/sidebars if caught in fallback
+                # Skip the giant left sidebar container if caught
                 if "Narrow Your Search" in raw_text or "Reserve Your Vacation Condo" in raw_text:
                     continue
 
-                # Strip out excess whitespace and clean individual lines
+                # Clean lines
                 lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
 
-                # Filter out pure navigation & layout controls
                 ignore_phrases = [
                     "Reserve Your", "Vacation Condo", "Narrow Your Search",
                     "Vacation Type", "Bedrooms", "Protect Your Vacation",
                     "Membership Guidebook", "SORT BY", "MAP", "VIEW", "SHOW"
                 ]
                 cleaned_lines = [l for l in lines if not any(p in l for p in ignore_phrases)]
-
                 clean_card_text = "\n".join(cleaned_lines)
 
-                # Ensure it's a real resort listing with details (ID, Check-in, or Unit Size)
-                if clean_card_text and len(clean_card_text) > 30:
-                    if any(key in clean_card_text for key in ["ID", "Check-In", "Avail", "Bd", "Occ", "AS LOW AS"]):
+                # Ensure it's an actual resort card and not a generic header line
+                if clean_card_text and len(clean_card_text) > 25:
+                    # Require at least one resort-specific marker
+                    if any(key in clean_card_text for key in ["ID", "Check-In", "Avail", "Bd", "Occ", "AS LOW AS", "Check-Out"]):
                         extracted_cards.append(clean_card_text)
 
             except Exception as card_err:
