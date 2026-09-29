@@ -19,7 +19,7 @@ EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD") or os.getenv("EMAIL_PASS")
 EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
 
 SEEN_WEEKS_FILE = "seen_gdv_weeks.json"
-TARGET_MONTH_LABEL = "Nov 2026 - Feb 2027 (FL) | Sept 2027 (MI, VA, TN, NC) | Priority FL Regions"
+TARGET_MONTH_LABEL = "Nov 2026 - Feb 2027 (FL) | Aug-Sept 2027 (MI, VA, TN, NC) | Priority FL Regions"
 
 PRIORITY_LOCATIONS = [
     # Florida Keys
@@ -39,7 +39,7 @@ NON_US_KEYWORDS = [
 
 # Regional location matchers
 FLORIDA_PATTERNS = [r"\bflorida\b", r"\bfl\b"]
-SEPT_2027_STATES_PATTERNS = [
+Late_2027_STATES_PATTERNS = [
     r"\bmichigan\b", r"\bmi\b",
     r"\bvirginia\b", r"\bva\b",
     r"\btennessee\b", r"\btn\b",
@@ -197,95 +197,6 @@ def select_month_and_search(page, target_month_str):
         logging.warning(f"Error during month selection for {target_month_str}: {e}")
 
 
-def extract_all_resort_cards(page, month_label):
-    """
-    Extracts resort listing cards across all available pagination pages
-    for the selected month, with DOM structure logging on failure.
-    """
-    extracted_cards = []
-    current_page = 1
-
-    while True:
-        logging.info(f"Extracting resort cards from Page {current_page} for {month_label}...")
-
-        page.wait_for_timeout(1500)
-
-        # 1. Primary selectors (cards, panels, grid rows, items)
-        card_locators = page.locator(
-            ".condo-item, .resort-card, .resort-item, [id*='pnlResort'], "
-            "[id*='rpCondos'] > div, [id*='rpMonth'] > div, "
-            "tr[id*='Row'], div[class*='col-']"
-        )
-        card_count = card_locators.count()
-
-        # 2. Fallback: Find any element containing view/details links or standard text blocks
-        if card_count == 0:
-            card_locators = page.locator("div, tr, li").filter(
-                has=page.locator("a, button, input[type='submit']").filter(has_text=["Details", "View", "Book", "Select", "More"])
-            )
-            card_count = card_locators.count()
-
-        # 3. Diagnostic mode: If still 0, log the main container's DOM structure
-        if card_count == 0:
-            logging.warning(f"No card elements found on Page {current_page} for {month_label}.")
-            try:
-                dom_summary = page.evaluate("""() => {
-                    const form = document.querySelector('form');
-                    if (!form) return 'No form found on page';
-                    
-                    // Collect IDs and class names of main container elements
-                    const elements = Array.from(form.querySelectorAll('div[id], table[id], ul, section'));
-                    return elements.slice(0, 15).map(el => ({
-                        tag: el.tagName,
-                        id: el.id,
-                        class: el.className,
-                        textSnippet: el.innerText ? el.innerText.substring(0, 60).replace(/\\s+/g, ' ') : ''
-                    }));
-                }""")
-                logging.info(f"DOM Structure Diagnostic for {month_label}: {dom_summary}")
-            except Exception as diag_err:
-                logging.debug(f"Could not run diagnostic: {diag_err}")
-            break
-
-        for i in range(card_count):
-            try:
-                card_text = card_locators.nth(i).inner_text().strip()
-                if card_text and 15 < len(card_text) < 4000:
-                    extracted_cards.append(card_text)
-            except Exception as card_err:
-                logging.warning(f"Error parsing card {i} on page {current_page}: {card_err}")
-
-        # Check for pagination links
-        next_button = page.locator(
-            "a[id*='Next'], a[id*='lnkNext'], a[id*='lbNext'], "
-            ".pagination a:has-text('Next'), .pagination a:has-text('>'), "
-            "a[id*='DataPager']:has-text('>')"
-        ).first
-
-        if next_button.count() > 0 and next_button.is_visible():
-            is_disabled = next_button.get_attribute("disabled") or "disabled" in (next_button.get_attribute("class") or "")
-            if is_disabled:
-                logging.info(f"Next button disabled. Reached end of pagination at Page {current_page}.")
-                break
-
-            current_page += 1
-            logging.info(f"Navigating to Page {current_page} for {month_label}...")
-
-            href = next_button.get_attribute("href")
-            if href and href.startswith("javascript:"):
-                page.evaluate(href.replace("javascript:", ""))
-            else:
-                next_button.click(force=True)
-
-            page.wait_for_load_state("networkidle")
-            page.wait_for_timeout(2500)
-        else:
-            logging.info(f"No further pagination pages found after Page {current_page}.")
-            break
-
-    logging.info(f"Extracted total of {len(extracted_cards)} items across {current_page} page(s) for {month_label}.")
-    return extracted_cards
-
 import re
 
 def extract_all_resort_cards(page, month_label):
@@ -365,7 +276,8 @@ def process_target_months(page):
         ("December, 2026", "fl_only"),
         ("January, 2027", "fl_only"),
         ("February, 2027", "fl_only"),
-        ("September, 2027", "sept_2027_states")
+        ("August, 2027", "late_2027_states"),
+        ("September, 2027", "late_2027_states")
     ]
     
     combined_items = []
@@ -393,7 +305,7 @@ def process_target_months(page):
                 if region_rule == "fl_only":
                     if matches_patterns(item_text, FLORIDA_PATTERNS):
                         combined_items.append({"text": item_text, "is_priority": False})
-                elif region_rule == "sept_2027_states":
+                elif region_rule == "late_sept_2027_states":
                     if matches_patterns(item_text, SEPT_2027_STATES_PATTERNS):
                         combined_items.append({"text": item_text, "is_priority": False})
 
