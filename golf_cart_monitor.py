@@ -18,9 +18,17 @@ RECIPIENT_EMAIL = (
 )
 NEXTDOOR_SESSION_ID = os.environ.get("NEXTDOOR_SESSION_ID")
 
-# Search URLs for Tampa, FL Region
-FB_SEARCH_URL = "https://www.facebook.com/marketplace/tampa/search?query=golf%20cart&exact=false"
-CL_SEARCH_URL = "https://tampa.craigslist.org/search/sss?query=golf+cart#search=1~gallery~0~0"
+# Search URLs for Tampa & Sarasota Regions
+CL_SEARCH_URLS = [
+    ("Tampa", "https://tampa.craigslist.org/search/sss?query=golf+cart#search=1~gallery~0~0"),
+    ("Sarasota", "https://sarasota.craigslist.org/search/sss?query=golf+cart#search=1~gallery~0~0")
+]
+
+FB_SEARCH_URLS = [
+    ("Tampa", "https://www.facebook.com/marketplace/tampa/search?query=golf%20cart&exact=false"),
+    ("Sarasota", "https://www.facebook.com/marketplace/sarasota/search?query=golf%20cart&exact=false")
+]
+
 NEXTDOOR_SEARCH_URL = "https://nextdoor.com/search/?query=golf%20cart"
 
 EXCLUDE_KEYWORDS = [
@@ -201,79 +209,86 @@ def run_scraper():
         context = browser.new_context(**context_args)
         page = context.new_page()
 
-        # --- 1. SCRAPE CRAIGSLIST (TAMPA) ---
-        print("Scraping Tampa Craigslist...")
+        # --- 1. SCRAPE CRAIGSLIST (TAMPA & SARASOTA) ---
+        print("Scraping Craigslist (Tampa & Sarasota)...")
         cl_added = 0
-        try:
-            page.goto(CL_SEARCH_URL, wait_until="networkidle", timeout=30000)
-            page.wait_for_timeout(3000)
-            
-            cl_items = page.locator('.cl-search-result, .gallery-card, .cl-static-search-result').all()
-            print(f"Found {len(cl_items)} raw Craigslist result items.")
+        for location, cl_url in CL_SEARCH_URLS:
+            try:
+                print(f"Checking {location} Craigslist...")
+                page.goto(cl_url, wait_until="networkidle", timeout=30000)
+                page.wait_for_timeout(3000)
+                
+                cl_items = page.locator('.cl-search-result, .gallery-card, .cl-static-search-result').all()
+                print(f"Found {len(cl_items)} raw {location} Craigslist result items.")
 
-            for item in cl_items[:30]:
-                try:
-                    title_el = item.locator('a.title, a.cl-app-anchor, .title').first
-                    if not title_el.is_visible():
+                for item in cl_items[:30]:
+                    try:
+                        title_el = item.locator('a.title, a.cl-app-anchor, .title').first
+                        if not title_el.is_visible():
+                            continue
+                        
+                        title = title_el.inner_text().strip()
+                        href = title_el.get_attribute("href")
+                        
+                        price_el = item.locator('.price, .priceinfo').first
+                        price = price_el.inner_text().strip() if price_el.is_visible() else "N/A"
+
+                        if not href or not title or not is_valid_cart(title):
+                            continue
+
+                        domain = "sarasota" if location == "Sarasota" else "tampa"
+                        clean_link = href if href.startswith("http") else f"https://{domain}.craigslist.org{href}"
+                        item_id = f"cl_{clean_link.split('/')[-1].replace('.html', '')}"
+
+                        if process_item_match(item_id, title, price, clean_link, f"Craigslist ({location})", seen_items, new_matches):
+                            cl_added += 1
+
+                    except Exception:
                         continue
-                    
-                    title = title_el.inner_text().strip()
-                    href = title_el.get_attribute("href")
-                    
-                    price_el = item.locator('.price, .priceinfo').first
-                    price = price_el.inner_text().strip() if price_el.is_visible() else "N/A"
+            except Exception as e:
+                print(f"Error scraping {location} Craigslist: {e}")
 
-                    if not href or not title or not is_valid_cart(title):
-                        continue
+        print(f"Craigslist section added {cl_added} total items to notification queue.")
 
-                    clean_link = href if href.startswith("http") else f"https://tampa.craigslist.org{href}"
-                    item_id = f"cl_{clean_link.split('/')[-1].replace('.html', '')}"
-
-                    if process_item_match(item_id, title, price, clean_link, "Craigslist", seen_items, new_matches):
-                        cl_added += 1
-
-                except Exception:
-                    continue
-            print(f"Craigslist section added {cl_added} items to notification queue.")
-        except Exception as e:
-            print(f"Error scraping Craigslist: {e}")
-
-        # --- 2. SCRAPE FACEBOOK MARKETPLACE (TAMPA) ---
-        print("Scraping Tampa Facebook Marketplace...")
+        # --- 2. SCRAPE FACEBOOK MARKETPLACE (TAMPA & SARASOTA) ---
+        print("Scraping Facebook Marketplace (Tampa & Sarasota)...")
         fb_added = 0
-        try:
-            page.goto(FB_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_timeout(5000)
-            page.evaluate("window.scrollBy(0, 1000);")
-            page.wait_for_timeout(3000)
+        for location, fb_url in FB_SEARCH_URLS:
+            try:
+                print(f"Checking {location} Facebook Marketplace...")
+                page.goto(fb_url, wait_until="domcontentloaded", timeout=30000)
+                page.wait_for_timeout(5000)
+                page.evaluate("window.scrollBy(0, 1000);")
+                page.wait_for_timeout(3000)
 
-            soup_fb = BeautifulSoup(page.content(), "html.parser")
-            fb_cards = soup_fb.find_all("a", href=lambda href: href and "/marketplace/item/" in href)
-            print(f"Found {len(fb_cards)} Facebook Marketplace cards.")
+                soup_fb = BeautifulSoup(page.content(), "html.parser")
+                fb_cards = soup_fb.find_all("a", href=lambda href: href and "/marketplace/item/" in href)
+                print(f"Found {len(fb_cards)} Facebook Marketplace cards for {location}.")
 
-            for card in fb_cards:
-                raw_href = card["href"]
-                item_id = extract_fb_id(raw_href)
-                if not item_id:
-                    continue
+                for card in fb_cards:
+                    raw_href = card["href"]
+                    item_id = extract_fb_id(raw_href)
+                    if not item_id:
+                        continue
 
-                clean_link = f"https://www.facebook.com/marketplace/item/{item_id.replace('fb_', '')}/"
-                card_text = [t.strip() for t in card.stripped_strings if t.strip()]
-                if not card_text:
-                    continue
+                    clean_link = f"https://www.facebook.com/marketplace/item/{item_id.replace('fb_', '')}/"
+                    card_text = [t.strip() for t in card.stripped_strings if t.strip()]
+                    if not card_text:
+                        continue
 
-                price = card_text[0] if "$" in card_text[0] else ("N/A" if not any("$" in t for t in card_text) else next(t for t in card_text if "$" in t))
-                title = card_text[1] if len(card_text) > 1 and card_text[1] != price else card_text[0]
+                    price = card_text[0] if "$" in card_text[0] else ("N/A" if not any("$" in t for t in card_text) else next(t for t in card_text if "$" in t))
+                    title = card_text[1] if len(card_text) > 1 and card_text[1] != price else card_text[0]
 
-                if not is_valid_cart(title):
-                    continue
+                    if not is_valid_cart(title):
+                        continue
 
-                if process_item_match(item_id, title, price, clean_link, "Facebook", seen_items, new_matches):
-                    fb_added += 1
+                    if process_item_match(item_id, title, price, clean_link, f"Facebook ({location})", seen_items, new_matches):
+                        fb_added += 1
 
-            print(f"Facebook section added {fb_added} items to notification queue.")
-        except Exception as e:
-            print(f"Error scraping Facebook Marketplace: {e}")
+            except Exception as e:
+                print(f"Error scraping {location} Facebook Marketplace: {e}")
+
+        print(f"Facebook section added {fb_added} total items to notification queue.")
 
         # --- 3. SCRAPE NEXTDOOR ---
         if NEXTDOOR_SESSION_ID:
