@@ -257,9 +257,26 @@ def run_scraper():
             try:
                 print(f"Checking {location} Facebook Marketplace...")
                 page.goto(fb_url, wait_until="domcontentloaded", timeout=30000)
-                page.wait_for_timeout(5000)
+                page.wait_for_timeout(4000)
+
+                # Retry up to 3 times to clear stubborn login overlays
+                for _ in range(3):
+                    page.keyboard.press("Escape")
+                    page.wait_for_timeout(500)
+                    
+                    close_btn = page.query_selector("div[aria-label='Close'], div[role='dialog'] div[aria-label='Close'], [aria-label='Decline']")
+                    if close_btn:
+                        try:
+                            close_btn.click(force=True)
+                            print(f"Dismissed Facebook login pop-up for {location}!")
+                        except Exception:
+                            pass
+                    page.wait_for_timeout(1000)
+
                 page.evaluate("window.scrollBy(0, 1000);")
                 page.wait_for_timeout(3000)
+
+                page.screenshot(path=f"fb_debug_{location.lower()}.png")
 
                 soup_fb = BeautifulSoup(page.content(), "html.parser")
                 fb_cards = soup_fb.find_all("a", href=lambda href: href and "/marketplace/item/" in href)
