@@ -39,7 +39,7 @@ NON_US_KEYWORDS = [
 
 # Regional location matchers
 FLORIDA_PATTERNS = [r"\bflorida\b", r"\bfl\b"]
-Late_2027_STATES_PATTERNS = [
+LATE_2027_STATES_PATTERNS = [
     r"\bmichigan\b", r"\bmi\b",
     r"\bvirginia\b", r"\bva\b",
     r"\btennessee\b", r"\btn\b",
@@ -70,11 +70,6 @@ def save_seen_weeks(seen_weeks):
         logging.error(f"Error saving seen weeks: {e}")
 
 
-def clean_resort_text(raw_text):
-    text = raw_text.replace("View Resort", "").replace("VIEW RESORT", "").strip()
-    return " ".join(text.split())
-
-
 def is_priority_location(text):
     lower_text = text.lower()
     return any(loc in lower_text for loc in PRIORITY_LOCATIONS)
@@ -102,16 +97,12 @@ def send_email_notification(new_weeks):
 
     body_text = f"Global Discovery Vacations - New Inventory Alert\n"
     body_text += f"{'=' * 50}\n"
-    body_text += f"Filter Mode: Nov 2026 - Feb 2027 (FL) | Sept 2027 (MI, VA, TN, NC) | Priority FL Regions\n"
+    body_text += f"Filter Mode: Nov 2026 - Feb 2027 (FL) | Aug-Sept 2027 (MI, VA, TN, NC) | Priority FL Regions\n"
     body_text += f"Total New Listings Found: {len(new_weeks)}\n\n"
 
     for idx, item in enumerate(new_weeks, start=1):
-        # Extract the full text content if available, falling back to clean_title
         card_content = item.get("raw_text") or item.get("clean_title") or str(item)
-        
-        # Collapse multi-line card text into a single space-separated line
         single_line_text = " ".join(card_content.splitlines()).strip()
-        
         priority_tag = " [PRIORITY LOCATION MATCH]" if item.get("is_priority") else ""
         
         body_text += f"{idx}. {single_line_text}{priority_tag}\n"
@@ -147,10 +138,6 @@ def dismiss_modals(page):
 
 
 def select_month_and_search(page, target_month_str):
-    """
-    Navigates to the GDV Condos portal and triggers the ASP.NET postback
-    for the selected month dropdown option.
-    """
     condos_url = "https://globaldiscoveryvacations.com/condos/Condos.aspx"
     
     try:
@@ -166,13 +153,10 @@ def select_month_and_search(page, target_month_str):
             month_btn.click()
             page.wait_for_timeout(1000)
 
-            # Target the lbMonth LinkButton inside rpMonth dropdown items
             month_option = page.locator(f"a[id*='lbMonth']:has-text('{target_month_str}')").first
             
             if month_option.count() > 0 and month_option.is_visible():
                 logging.info(f"Clicking lbMonth LinkButton for {target_month_str}...")
-                
-                # Execute __doPostBack directly if JavaScript href is present
                 href = month_option.get_attribute("href")
                 if href and href.startswith("javascript:"):
                     page.evaluate(href.replace("javascript:", ""))
@@ -191,19 +175,8 @@ def select_month_and_search(page, target_month_str):
     except Exception as e:
         logging.warning(f"Error during month selection for {target_month_str}: {e}")
 
-        dismiss_modals(page)
-
-    except Exception as e:
-        logging.warning(f"Error during month selection for {target_month_str}: {e}")
-
-
-import re
 
 def extract_all_resort_cards(page, month_label):
-    """
-    Extracts individual resort listing cards across all available pagination pages
-    for the selected month using the exact article.items container selector.
-    """
     extracted_cards = []
     current_page = 1
 
@@ -211,7 +184,6 @@ def extract_all_resort_cards(page, month_label):
         logging.info(f"Extracting resort cards from Page {current_page} for {month_label}...")
         page.wait_for_timeout(1500)
 
-        # Target the exact article elements that wrap each resort card
         cards = page.locator("article.items")
         card_count = cards.count()
 
@@ -222,8 +194,6 @@ def extract_all_resort_cards(page, month_label):
         for i in range(card_count):
             try:
                 raw_text = cards.nth(i).inner_text().strip()
-
-                # Clean lines
                 lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
 
                 ignore_phrases = [
@@ -240,10 +210,12 @@ def extract_all_resort_cards(page, month_label):
             except Exception as card_err:
                 logging.warning(f"Error parsing card {i} on page {current_page}: {card_err}")
 
-        # Check for pagination next button
+        # Check for GDV pagination buttons (Next button OR numeric next page button)
+        next_page_num = current_page + 1
         next_button = page.locator(
-            "a[id*='Next'], a[id*='lnkNext'], a[id*='lbNext'], "
-            ".pagination a:has-text('Next'), .pagination a:has-text('>')"
+            f"a[id*='Next'], a[id*='lnkNext'], a[id*='lbNext'], "
+            f"a[id*='lbPage']:has-text('{next_page_num}'), "
+            f".pagination a:has-text('{next_page_num}'), .pagination a:has-text('Next'), .pagination a:has-text('>')"
         ).first
 
         if next_button.count() > 0 and next_button.is_visible():
@@ -270,7 +242,6 @@ def extract_all_resort_cards(page, month_label):
 
 
 def process_target_months(page):
-    """Navigates to GDV Condo search, applies target dates, and extracts inventory."""
     target_months = [
         ("November, 2026", "fl_only"),
         ("December, 2026", "fl_only"),
@@ -305,8 +276,8 @@ def process_target_months(page):
                 if region_rule == "fl_only":
                     if matches_patterns(item_text, FLORIDA_PATTERNS):
                         combined_items.append({"text": item_text, "is_priority": False})
-                elif region_rule == "late_sept_2027_states":
-                    if matches_patterns(item_text, SEPT_2027_STATES_PATTERNS):
+                elif region_rule == "late_2027_states":
+                    if matches_patterns(item_text, LATE_2027_STATES_PATTERNS):
                         combined_items.append({"text": item_text, "is_priority": False})
 
         except Exception as e:
