@@ -20,8 +20,8 @@ MAX_LAND_PRICE = 200000
 
 # UPDATED: Changed category code from /search/rea to /search/repa
 CRAIGSLIST_SITES = [
-    {"name": "Eau Claire", "url": "https://eauclaire.craigslist.org/search/repa?query=land"},
-    {"name": "Minneapolis / St. Paul", "url": "https://minneapolis.craigslist.org/search/repa?query=land"}
+    {"name": "Eau Claire", "url": "https://eauclaire.craigslist.org/search/eau/rea?query=land"},
+    {"name": "Minneapolis / St. Paul", "url": "https://minneapolis.craigslist.org/search/msp/rea?query=land"}
 ]
 
 REALTOR_URLS = [
@@ -200,13 +200,35 @@ def scrape_realtor(seen_ids):
         with sync_playwright() as p:
             browser = p.chromium.launch(
                 headless=True,
-                args=["--disable-blink-features=AutomationControlled", "--no-sandbox"]
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-infobars",
+                    "--window-position=0,0",
+                    "--ignore-certificate-errors",
+                    "--ignore-certificate-errors-spki-list"
+                ]
             )
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                viewport={"width": 1280, "height": 800}
+                viewport={"width": 1920, "height": 1080},
+                extra_http_headers={
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                    "Sec-Ch-Ua": '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
+                    "Sec-Ch-Ua-Mobile": "?0",
+                    "Sec-Ch-Ua-Platform": '"Windows"'
+                }
             )
             page = context.new_page()
+            
+            # Remove navigator.webdriver flag
+            page.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => undefined
+                });
+            """)
 
             for item in REALTOR_URLS:
                 county = item["county"]
