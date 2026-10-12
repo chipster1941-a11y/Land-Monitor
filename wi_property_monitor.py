@@ -16,11 +16,12 @@ from playwright.sync_api import sync_playwright
 # ==========================================
 TARGET_COUNTIES = ["barron", "polk", "dunn"]
 KEY_WORDS = ["land", "acre", "acres", "acreage", "lot", "parcel", "waterfront", "river", "farm", "farmland"]
-MAX_LAND_PRICE = 200000  # $200,000 max budget for land
+MAX_LAND_PRICE = 200000 
 
+# UPDATED: Changed category code from /search/rea to /search/repa
 CRAIGSLIST_SITES = [
-    {"name": "Eau Claire", "url": "https://eauclaire.craigslist.org/search/rea?query=land"},
-    {"name": "Minneapolis / St. Paul", "url": "https://minneapolis.craigslist.org/search/rea?query=land"}
+    {"name": "Eau Claire", "url": "https://eauclaire.craigslist.org/search/repa?query=land"},
+    {"name": "Minneapolis / St. Paul", "url": "https://minneapolis.craigslist.org/search/repa?query=land"}
 ]
 
 REALTOR_URLS = [
