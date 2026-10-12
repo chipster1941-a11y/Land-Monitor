@@ -14,7 +14,7 @@ from curl_cffi import requests as curl_requests
 # ==========================================
 TARGET_COUNTIES = ["barron", "polk", "dunn"]
 KEY_WORDS = ["land", "acre", "acres", "acreage", "lot", "parcel", "waterfront", "river", "farm", "farmland"]
-MAX_LAND_PRICE = 200000  # $200,000 max budget for land
+MAX_LAND_PRICE = 300000  # Updated to $300,000 max budget
 
 # 1. CRAIGSLIST (Vacant Land Category: /search/rva)
 CRAIGSLIST_SITES = [
@@ -22,11 +22,11 @@ CRAIGSLIST_SITES = [
     {"name": "Minneapolis / St. Paul", "url": "https://minneapolis.craigslist.org/search/rva?query=land"}
 ]
 
-# 2. LANDWATCH (County Search Endpoints under $200k)
+# 2. LANDWATCH (Barron, Polk, Dunn under $300k)
 LANDWATCH_URLS = [
-    {"county": "Barron County", "url": "https://www.landwatch.com/wisconsin-land-for-sale/barron-county/price-under-200000"},
-    {"county": "Polk County", "url": "https://www.landwatch.com/wisconsin-land-for-sale/polk-county/price-under-200000"},
-    {"county": "Dunn County", "url": "https://www.landwatch.com/wisconsin-land-for-sale/dunn-county/price-under-200000"}
+    {"county": "Barron County", "url": "https://www.landwatch.com/wisconsin-land-for-sale/barron-county/price-under-300000"},
+    {"county": "Polk County", "url": "https://www.landwatch.com/wisconsin-land-for-sale/polk-county/price-under-300000"},
+    {"county": "Dunn County", "url": "https://www.landwatch.com/wisconsin-land-for-sale/dunn-county/price-under-300000"}
 ]
 
 SEEN_FILE = "seen_properties.txt"
@@ -94,7 +94,7 @@ def save_to_csv(matches, filename=CSV_FILE):
 
 
 # ==========================================
-# SCRAPER 1: CRAIGSLIST
+# SCRAPER 1: CRAIGSLIST (Strict County Filter)
 # ==========================================
 def scrape_craigslist(seen_ids):
     print("[1/2] Checking Craigslist Vacant Land...")
@@ -110,10 +110,10 @@ def scrape_craigslist(seen_ids):
 
             soup = BeautifulSoup(res.text, "html.parser")
             postings = soup.find_all("li", class_="cl-search-result") or soup.find_all("li", class_="result-row")
-            print(f"    Raw postings returned: {len(postings)}")
 
             filtered_seen = 0
             filtered_price = 0
+            filtered_county = 0
 
             for post in postings:
                 post_id = post.get("data-pid")
@@ -136,6 +136,13 @@ def scrape_craigslist(seen_ids):
                 title = title_elem.text.strip() if title_elem else "WI Land Parcel"
                 link = title_elem["href"] if title_elem and title_elem.has_attr("href") else ""
 
+                # Strict County Filter for Craigslist (Checks Title and URL text)
+                text_to_check = (title + " " + link).lower()
+                has_county = any(c in text_to_check for c in TARGET_COUNTIES)
+                if not has_county:
+                    filtered_county += 1
+                    continue
+
                 price_elem = post.find("span", class_="price") or post.find("span", class_="property-price")
                 price = price_elem.text.strip() if price_elem else "N/A"
 
@@ -147,7 +154,7 @@ def scrape_craigslist(seen_ids):
                 img_elem = post.find("img")
                 image_url = img_elem["src"] if img_elem and img_elem.has_attr("src") else ""
 
-                search_query = urllib.parse.quote(f"{title}, {site['name']} WI")
+                search_query = urllib.parse.quote(f"{title}, WI")
                 map_url = f"https://www.google.com/maps/search/?api=1&query={search_query}"
 
                 item = {
@@ -164,7 +171,7 @@ def scrape_craigslist(seen_ids):
                 seen_ids.add(full_id)
                 save_seen_id(full_id)
 
-            print(f"    New matches: {len(matches)} | Filtered (Already Seen): {filtered_seen} | Over Budget: {filtered_price}")
+            print(f"    New matches: {len(matches)} | Filtered Out: {filtered_county} non-target counties, {filtered_seen} already seen, {filtered_price} over $300k")
 
         except Exception as e:
             print(f"    [ERROR] Exception on {site['name']}: {e}")
@@ -173,7 +180,7 @@ def scrape_craigslist(seen_ids):
 
 
 # ==========================================
-# SCRAPER 2: LANDWATCH
+# SCRAPER 2: LANDWATCH (Barron, Polk, Dunn)
 # ==========================================
 def scrape_landwatch(seen_ids):
     print("[2/2] Checking LandWatch for County Farmland/Acreage...")
@@ -182,7 +189,7 @@ def scrape_landwatch(seen_ids):
     for item in LANDWATCH_URLS:
         county = item["county"]
         url = item["url"]
-        print(f" -> Querying LandWatch for {county}...")
+        print(f" -> Querying LandWatch for {county} (Under $300k)...")
 
         try:
             res = curl_requests.get(url, impersonate="chrome120", timeout=15)
@@ -191,17 +198,13 @@ def scrape_landwatch(seen_ids):
                 continue
 
             soup = BeautifulSoup(res.text, "html.parser")
-            
-            # Find property cards
             cards = soup.select('div[data-site-id]') or soup.select('a[href*="/wisconsin-land-for-sale/"]')
-            print(f"    Raw property elements found for {county}: {len(cards)}")
 
             for card in cards:
                 href = card.get("href") or (card.find("a", href=True)["href"] if card.find("a", href=True) else "")
                 if not href or "/wisconsin-land-for-sale/" not in href:
                     continue
 
-                # Unique LandWatch ID extraction
                 id_match = re.search(r'/pid/(\d+)', href) or re.search(r'/id/(\d+)', href)
                 prop_id = id_match.group(1) if id_match else href.split("/")[-1]
                 if not prop_id:
@@ -271,7 +274,7 @@ def send_email_alert(matches):
             <h2 style="background-color: #15803d; color: white; padding: 14px; border-radius: 6px; text-align: center; margin-top: 0;">
                 🌾 New Land / Acreage Alert ({count})
             </h2>
-            <p style="color: #475569; font-size: 14px;">The following new land listing(s) under $200,000 were found:</p>
+            <p style="color: #475569; font-size: 14px;">The following new land listing(s) under $300,000 were found:</p>
             <hr style="border: 0; border-top: 1px solid #e2e8f0; margin-bottom: 20px;">
     """
 
