@@ -20,8 +20,8 @@ MAX_LAND_PRICE = 200000
 
 # UPDATED: Changed category code from /search/rea to /search/repa
 CRAIGSLIST_SITES = [
-    {"name": "Eau Claire", "url": "https://eauclaire.craigslist.org/search/eau/rea?query=land"},
-    {"name": "Minneapolis / St. Paul", "url": "https://minneapolis.craigslist.org/search/msp/rea?query=land"}
+    {"name": "Eau Claire", "url": "https://eauclaire.craigslist.org/search/rrr?query=land"},
+    {"name": "Minneapolis / St. Paul", "url": "https://minneapolis.craigslist.org/search/rrr?query=land"}
 ]
 
 REALTOR_URLS = [
@@ -222,8 +222,8 @@ def scrape_realtor(seen_ids):
                 }
             )
             page = context.new_page()
-            
-            # Remove navigator.webdriver flag
+
+            # Evade webdriver detection flag
             page.add_init_script("""
                 Object.defineProperty(navigator, 'webdriver', {
                     get: () => undefined
