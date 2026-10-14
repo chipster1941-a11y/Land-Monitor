@@ -181,13 +181,20 @@ def scrape_craigslist(seen_ids):
 
 
 # ==========================================
-# SCRAPER 2: LANDWATCH
+# SCRAPER 2: LANDWATCH (Strict Price & Card Filter)
 # ==========================================
 def scrape_landwatch(seen_ids):
     print("[2/2] Checking LandWatch for County Farmland/Acreage...")
     matches = []
 
-    for item in LANDWATCH_URLS:
+    # Using LandWatch's explicit query parameters for price caps under $300k
+    landwatch_sources = [
+        {"county": "Barron County", "url": "https://www.landwatch.com/wisconsin-land-for-sale/barron-county?pj[max]=300000"},
+        {"county": "Polk County", "url": "https://www.landwatch.com/wisconsin-land-for-sale/polk-county?pj[max]=300000"},
+        {"county": "Dunn County", "url": "https://www.landwatch.com/wisconsin-land-for-sale/dunn-county?pj[max]=300000"}
+    ]
+
+    for item in landwatch_sources:
         county = item["county"]
         url = item["url"]
         print(f" -> Querying LandWatch for {county} (Under $300k)...")
@@ -200,45 +207,64 @@ def scrape_landwatch(seen_ids):
 
             soup = BeautifulSoup(res.text, "html.parser")
             
-            # Select link blocks pointing directly to land detailed view
-            cards = soup.select('a[href*="/wisconsin-land-for-sale/"]')
+            # Target actual property card containers, ignoring sidebar navigation links
+            cards = (
+                soup.select('div[class*="propertyCard"]') or 
+                soup.select('div._181f0') or 
+                soup.select('div[data-site-id]')
+            )
+
+            print(f"    Raw card containers found for {county}: {len(cards)}")
+
+            filtered_price = 0
+            filtered_seen = 0
+            filtered_no_price = 0
 
             for card in cards:
-                href = card.get("href", "")
-                if not href or "/wisconsin-land-for-sale/" not in href:
+                # Find detail link inside card
+                link_elem = card.find("a", href=True)
+                if not link_elem:
                     continue
 
-                # Ensure full link URL
+                href = link_elem["href"]
+                if "/wisconsin-land-for-sale/" not in href:
+                    continue
+
                 link = f"https://www.landwatch.com{href}" if href.startswith("/") else href
 
-                # Extract unique string ID from URL path or numerical ID
+                # Extract property ID
                 id_match = re.search(r'/pid/(\d+)', href) or re.search(r'/id/(\d+)', href) or re.search(r'-(\d+)$', href)
                 if id_match:
                     prop_id = id_match.group(1)
                 else:
-                    # Sanitize full link path as robust fallback ID
-                    prop_id = re.sub(r'[^a-zA-Z0-9]', '', href.replace("https://www.landwatch.com", ""))
+                    prop_id = re.sub(r'[^a-zA-Z0-9]', '', href.split("?")[0])
 
                 if not prop_id:
                     continue
 
                 full_id = f"landwatch_{prop_id}"
                 if full_id in seen_ids:
+                    filtered_seen += 1
                     continue
 
-                # Extract full text content from card block
+                # Get clean price text from card
                 card_text = card.get_text(" ", strip=True)
-
-                # Robust price extraction via regex matching on inner HTML/text
                 price_match = re.search(r'\$[\d,]+', card_text)
-                price = price_match.group(0) if price_match else "N/A"
+                
+                if not price_match:
+                    filtered_no_price += 1
+                    continue  # Strict drop: skip cards with no clear price
 
-                num_price = parse_price(price)
-                if num_price is not None and num_price > MAX_LAND_PRICE:
+                price_str = price_match.group(0)
+                num_price = parse_price(price_str)
+
+                # Strict price enforcer
+                if num_price is None or num_price > MAX_LAND_PRICE:
+                    filtered_price += 1
                     continue
 
-                # Clean Title text
-                title = re.sub(r'\s+', ' ', card_text)[:80] if card_text else f"Land in {county}"
+                # Title extraction
+                title = re.sub(r'\s+', ' ', card_text)[:80]
 
                 img_elem = card.find("img")
                 image_url = (img_elem.get("src") or img_elem.get("data-src") or "") if img_elem else ""
@@ -249,7 +275,7 @@ def scrape_landwatch(seen_ids):
                 item_data = {
                     "id": full_id,
                     "title": title,
-                    "price": price,
+                    "price": price_str,
                     "location": f"{county}, WI",
                     "link": link,
                     "source": "LandWatch",
@@ -259,6 +285,8 @@ def scrape_landwatch(seen_ids):
                 matches.append(item_data)
                 seen_ids.add(full_id)
                 save_seen_id(full_id)
+
+            print(f"    New LandWatch matches: {len(matches)} | Skipped: {filtered_price} over $300k, {filtered_seen} already seen, {filtered_no_price} missing price")
 
         except Exception as e:
             print(f"    [ERROR] LandWatch exception for {county}: {e}")
