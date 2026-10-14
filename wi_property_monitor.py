@@ -14,15 +14,15 @@ from curl_cffi import requests as curl_requests
 # ==========================================
 TARGET_COUNTIES = ["barron", "polk", "dunn"]
 KEY_WORDS = ["land", "acre", "acres", "acreage", "lot", "parcel", "waterfront", "river", "farm", "farmland"]
-MAX_LAND_PRICE = 300000  # Updated to $300,000 max budget
+MAX_LAND_PRICE = 300000  # $300,000 max budget
 
-# 1. CRAIGSLIST (Vacant Land Category: /search/rva)
+# 1. CRAIGSLIST
 CRAIGSLIST_SITES = [
     {"name": "Eau Claire", "url": "https://eauclaire.craigslist.org/search/rva?query=land"},
     {"name": "Minneapolis / St. Paul", "url": "https://minneapolis.craigslist.org/search/rva?query=land"}
 ]
 
-# 2. LANDWATCH (Barron, Polk, Dunn under $300k)
+# 2. LANDWATCH
 LANDWATCH_URLS = [
     {"county": "Barron County", "url": "https://www.landwatch.com/wisconsin-land-for-sale/barron-county/price-under-300000"},
     {"county": "Polk County", "url": "https://www.landwatch.com/wisconsin-land-for-sale/polk-county/price-under-300000"},
@@ -32,7 +32,6 @@ LANDWATCH_URLS = [
 SEEN_FILE = "seen_properties.txt"
 CSV_FILE = "matched_properties.csv"
 
-# Email environment variables
 EMAIL_SENDER = os.environ.get("SENDER_EMAIL") or os.environ.get("EMAIL_SENDER")
 EMAIL_PASSWORD = os.environ.get("SENDER_PASSWORD") or os.environ.get("EMAIL_PASSWORD")
 EMAIL_RECEIVER = os.environ.get("RECIPIENT_EMAIL") or os.environ.get("EMAIL_RECEIVER")
@@ -42,6 +41,7 @@ EMAIL_RECEIVER = os.environ.get("RECIPIENT_EMAIL") or os.environ.get("EMAIL_RECE
 # HELPERS
 # ==========================================
 def parse_price(price_str):
+    """Extracts numeric price float from strings like '$250,000' or '$1.2M'."""
     if not price_str or any(w in str(price_str).upper() for w in ["N/A", "CHECK LISTING", "CONTACT AGENT"]):
         return None
     
@@ -50,7 +50,8 @@ def parse_price(price_str):
         return None
         
     try:
-        return float(match.group(1).replace(',', ''))
+        val = float(match.group(1).replace(',', ''))
+        return val
     except ValueError:
         return None
 
@@ -94,7 +95,7 @@ def save_to_csv(matches, filename=CSV_FILE):
 
 
 # ==========================================
-# SCRAPER 1: CRAIGSLIST (Strict County Filter)
+# SCRAPER 1: CRAIGSLIST
 # ==========================================
 def scrape_craigslist(seen_ids):
     print("[1/2] Checking Craigslist Vacant Land...")
@@ -136,7 +137,7 @@ def scrape_craigslist(seen_ids):
                 title = title_elem.text.strip() if title_elem else "WI Land Parcel"
                 link = title_elem["href"] if title_elem and title_elem.has_attr("href") else ""
 
-                # Strict County Filter for Craigslist (Checks Title and URL text)
+                # Strict County Filter
                 text_to_check = (title + " " + link).lower()
                 has_county = any(c in text_to_check for c in TARGET_COUNTIES)
                 if not has_county:
@@ -180,7 +181,7 @@ def scrape_craigslist(seen_ids):
 
 
 # ==========================================
-# SCRAPER 2: LANDWATCH (Barron, Polk, Dunn)
+# SCRAPER 2: LANDWATCH
 # ==========================================
 def scrape_landwatch(seen_ids):
     print("[2/2] Checking LandWatch for County Farmland/Acreage...")
@@ -198,15 +199,26 @@ def scrape_landwatch(seen_ids):
                 continue
 
             soup = BeautifulSoup(res.text, "html.parser")
-            cards = soup.select('div[data-site-id]') or soup.select('a[href*="/wisconsin-land-for-sale/"]')
+            
+            # Select link blocks pointing directly to land detailed view
+            cards = soup.select('a[href*="/wisconsin-land-for-sale/"]')
 
             for card in cards:
-                href = card.get("href") or (card.find("a", href=True)["href"] if card.find("a", href=True) else "")
+                href = card.get("href", "")
                 if not href or "/wisconsin-land-for-sale/" not in href:
                     continue
 
-                id_match = re.search(r'/pid/(\d+)', href) or re.search(r'/id/(\d+)', href)
-                prop_id = id_match.group(1) if id_match else href.split("/")[-1]
+                # Ensure full link URL
+                link = f"https://www.landwatch.com{href}" if href.startswith("/") else href
+
+                # Extract unique string ID from URL path or numerical ID
+                id_match = re.search(r'/pid/(\d+)', href) or re.search(r'/id/(\d+)', href) or re.search(r'-(\d+)$', href)
+                if id_match:
+                    prop_id = id_match.group(1)
+                else:
+                    # Sanitize full link path as robust fallback ID
+                    prop_id = re.sub(r'[^a-zA-Z0-9]', '', href.replace("https://www.landwatch.com", ""))
+
                 if not prop_id:
                     continue
 
@@ -214,17 +226,19 @@ def scrape_landwatch(seen_ids):
                 if full_id in seen_ids:
                     continue
 
-                link = f"https://www.landwatch.com{href}" if href.startswith("/") else href
+                # Extract full text content from card block
+                card_text = card.get_text(" ", strip=True)
 
-                price_elem = card.find(text=re.compile(r'\$\d+'))
-                price = price_elem.strip() if price_elem else "N/A"
+                # Robust price extraction via regex matching on inner HTML/text
+                price_match = re.search(r'\$[\d,]+', card_text)
+                price = price_match.group(0) if price_match else "N/A"
 
                 num_price = parse_price(price)
                 if num_price is not None and num_price > MAX_LAND_PRICE:
                     continue
 
-                title = card.text.strip().replace("\n", " ")
-                title = re.sub(r'\s+', ' ', title)[:80] if title else f"Land in {county}"
+                # Clean Title text
+                title = re.sub(r'\s+', ' ', card_text)[:80] if card_text else f"Land in {county}"
 
                 img_elem = card.find("img")
                 image_url = (img_elem.get("src") or img_elem.get("data-src") or "") if img_elem else ""
