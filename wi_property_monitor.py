@@ -1,6 +1,7 @@
 import os
 import re
 import csv
+import json
 import smtplib
 import urllib.parse
 from datetime import datetime
@@ -16,17 +17,17 @@ TARGET_COUNTIES = ["barron", "polk", "dunn"]
 KEY_WORDS = ["land", "acre", "acres", "acreage", "lot", "parcel", "waterfront", "river", "farm", "farmland"]
 MAX_LAND_PRICE = 300000  # $300,000 max budget
 
-# 1. CRAIGSLIST
+# 1. CRAIGSLIST (Vacant Land Category)
 CRAIGSLIST_SITES = [
     {"name": "Eau Claire", "url": "https://eauclaire.craigslist.org/search/rva?query=land"},
     {"name": "Minneapolis / St. Paul", "url": "https://minneapolis.craigslist.org/search/rva?query=land"}
 ]
 
-# 2. LANDWATCH
+# 2. LANDWATCH (County Search Endpoints with price range slug)
 LANDWATCH_URLS = [
-    {"county": "Barron County", "url": "https://www.landwatch.com/wisconsin-land-for-sale/barron-county/price-under-300000"},
-    {"county": "Polk County", "url": "https://www.landwatch.com/wisconsin-land-for-sale/polk-county/price-under-300000"},
-    {"county": "Dunn County", "url": "https://www.landwatch.com/wisconsin-land-for-sale/dunn-county/price-under-300000"}
+    {"county": "Barron County", "url": "https://www.landwatch.com/wisconsin-land-for-sale/barron-county/price-under-299999"},
+    {"county": "Polk County", "url": "https://www.landwatch.com/wisconsin-land-for-sale/polk-county/price-under-299999"},
+    {"county": "Dunn County", "url": "https://www.landwatch.com/wisconsin-land-for-sale/dunn-county/price-under-299999"}
 ]
 
 SEEN_FILE = "seen_properties.txt"
@@ -41,7 +42,6 @@ EMAIL_RECEIVER = os.environ.get("RECIPIENT_EMAIL") or os.environ.get("EMAIL_RECE
 # HELPERS
 # ==========================================
 def parse_price(price_str):
-    """Extracts numeric price float from strings like '$250,000' or '$1.2M'."""
     if not price_str or any(w in str(price_str).upper() for w in ["N/A", "CHECK LISTING", "CONTACT AGENT"]):
         return None
     
@@ -50,8 +50,7 @@ def parse_price(price_str):
         return None
         
     try:
-        val = float(match.group(1).replace(',', ''))
-        return val
+        return float(match.group(1).replace(',', ''))
     except ValueError:
         return None
 
@@ -137,7 +136,7 @@ def scrape_craigslist(seen_ids):
                 title = title_elem.text.strip() if title_elem else "WI Land Parcel"
                 link = title_elem["href"] if title_elem and title_elem.has_attr("href") else ""
 
-                # Strict County Filter
+                # County filter for Craigslist
                 text_to_check = (title + " " + link).lower()
                 has_county = any(c in text_to_check for c in TARGET_COUNTIES)
                 if not has_county:
@@ -181,20 +180,13 @@ def scrape_craigslist(seen_ids):
 
 
 # ==========================================
-# SCRAPER 2: LANDWATCH (Strict Price & Card Filter)
+# SCRAPER 2: LANDWATCH
 # ==========================================
 def scrape_landwatch(seen_ids):
     print("[2/2] Checking LandWatch for County Farmland/Acreage...")
     matches = []
 
-    # Using LandWatch's explicit query parameters for price caps under $300k
-    landwatch_sources = [
-        {"county": "Barron County", "url": "https://www.landwatch.com/wisconsin-land-for-sale/barron-county?pj[max]=300000"},
-        {"county": "Polk County", "url": "https://www.landwatch.com/wisconsin-land-for-sale/polk-county?pj[max]=300000"},
-        {"county": "Dunn County", "url": "https://www.landwatch.com/wisconsin-land-for-sale/dunn-county?pj[max]=300000"}
-    ]
-
-    for item in landwatch_sources:
+    for item in LANDWATCH_URLS:
         county = item["county"]
         url = item["url"]
         print(f" -> Querying LandWatch for {county} (Under $300k)...")
@@ -207,86 +199,128 @@ def scrape_landwatch(seen_ids):
 
             soup = BeautifulSoup(res.text, "html.parser")
             
-            # Target actual property card containers, ignoring sidebar navigation links
-            cards = (
-                soup.select('div[class*="propertyCard"]') or 
-                soup.select('div._181f0') or 
-                soup.select('div[data-site-id]')
-            )
+            # 1. Parse JSON-LD metadata for structured properties
+            found_via_json = False
+            json_scripts = soup.find_all("script", type="application/ld+json")
+            for script in json_scripts:
+                if not script.string:
+                    continue
+                try:
+                    data = json.loads(script.string)
+                    items = []
+                    if isinstance(data, list):
+                        items = data
+                    elif isinstance(data, dict):
+                        items = data.get("itemListElement", [data])
 
-            print(f"    Raw card containers found for {county}: {len(cards)}")
+                    for entry in items:
+                        item_obj = entry.get("item", entry) if isinstance(entry, dict) else {}
+                        if item_obj.get("@type") not in ["SingleFamilyResidence", "Product", "Place", "Offer"]:
+                            continue
 
-            filtered_price = 0
-            filtered_seen = 0
-            filtered_no_price = 0
+                        link = item_obj.get("url") or item_obj.get("mainEntityOfPage") or ""
+                        if not link or "/wisconsin-land-for-sale/" not in link:
+                            continue
 
-            for card in cards:
-                # Find detail link inside card
-                link_elem = card.find("a", href=True)
-                if not link_elem:
+                        # Extract property ID
+                        id_match = re.search(r'/pid/(\d+)', link) or re.search(r'/id/(\d+)', link) or re.search(r'-(\d+)$', link)
+                        prop_id = id_match.group(1) if id_match else re.sub(r'[^a-zA-Z0-9]', '', link.split("?")[0])
+
+                        full_id = f"landwatch_{prop_id}"
+                        if full_id in seen_ids:
+                            continue
+
+                        title = item_obj.get("name") or f"Land Lot in {county}"
+                        
+                        # Price extraction from JSON-LD
+                        offers = item_obj.get("offers", {})
+                        raw_price = offers.get("price") if isinstance(offers, dict) else None
+                        
+                        if raw_price:
+                            num_price = float(raw_price)
+                            price_str = f"${num_price:,.0f}"
+                        else:
+                            price_str = "N/A"
+                            num_price = None
+
+                        if num_price is not None and num_price > MAX_LAND_PRICE:
+                            continue
+
+                        img_url = item_obj.get("image") or ""
+                        if isinstance(img_url, list) and len(img_url) > 0:
+                            img_url = img_url[0]
+
+                        search_query = urllib.parse.quote(f"{title}, {county}, WI")
+                        map_url = f"https://www.google.com/maps/search/?api=1&query={search_query}"
+
+                        item_data = {
+                            "id": full_id,
+                            "title": title[:80],
+                            "price": price_str,
+                            "location": f"{county}, WI",
+                            "link": link,
+                            "source": "LandWatch",
+                            "image_url": img_url if isinstance(img_url, str) else "",
+                            "map_url": map_url
+                        }
+                        matches.append(item_data)
+                        seen_ids.add(full_id)
+                        save_seen_id(full_id)
+                        found_via_json = True
+
+                except Exception:
                     continue
 
-                href = link_elem["href"]
-                if "/wisconsin-land-for-sale/" not in href:
-                    continue
+            # 2. Fallback: Parse card blocks directly if JSON-LD isn't present
+            if not found_via_json:
+                cards = soup.select('a[href*="/wisconsin-land-for-sale/"]')
+                for card in cards:
+                    href = card.get("href", "")
+                    if not href or "/wisconsin-land-for-sale/" not in href:
+                        continue
 
-                link = f"https://www.landwatch.com{href}" if href.startswith("/") else href
+                    link = f"https://www.landwatch.com{href}" if href.startswith("/") else href
+                    card_text = card.get_text(" ", strip=True)
 
-                # Extract property ID
-                id_match = re.search(r'/pid/(\d+)', href) or re.search(r'/id/(\d+)', href) or re.search(r'-(\d+)$', href)
-                if id_match:
-                    prop_id = id_match.group(1)
-                else:
-                    prop_id = re.sub(r'[^a-zA-Z0-9]', '', href.split("?")[0])
+                    price_match = re.search(r'\$[\d,]+', card_text)
+                    if not price_match:
+                        continue
 
-                if not prop_id:
-                    continue
+                    price_str = price_match.group(0)
+                    num_price = parse_price(price_str)
 
-                full_id = f"landwatch_{prop_id}"
-                if full_id in seen_ids:
-                    filtered_seen += 1
-                    continue
+                    if num_price is None or num_price > MAX_LAND_PRICE:
+                        continue
 
-                # Get clean price text from card
-                card_text = card.get_text(" ", strip=True)
-                price_match = re.search(r'\$[\d,]+', card_text)
-                
-                if not price_match:
-                    filtered_no_price += 1
-                    continue  # Strict drop: skip cards with no clear price
+                    id_match = re.search(r'/pid/(\d+)', href) or re.search(r'/id/(\d+)', href) or re.search(r'-(\d+)$', href)
+                    prop_id = id_match.group(1) if id_match else re.sub(r'[^a-zA-Z0-9]', '', href.split("?")[0])
 
-                price_str = price_match.group(0)
-                num_price = parse_price(price_str)
+                    full_id = f"landwatch_{prop_id}"
+                    if full_id in seen_ids:
+                        continue
 
-                # Strict price enforcer
-                if num_price is None or num_price > MAX_LAND_PRICE:
-                    filtered_price += 1
-                    continue
+                    title = re.sub(r'\s+', ' ', card_text)[:80]
+                    img_elem = card.find("img")
+                    image_url = (img_elem.get("src") or img_elem.get("data-src") or "") if img_elem else ""
 
-                # Title extraction
-                title = re.sub(r'\s+', ' ', card_text)[:80]
+                    search_query = urllib.parse.quote(f"{title}, {county}, WI")
+                    map_url = f"https://www.google.com/maps/search/?api=1&query={search_query}"
 
-                img_elem = card.find("img")
-                image_url = (img_elem.get("src") or img_elem.get("data-src") or "") if img_elem else ""
+                    item_data = {
+                        "id": full_id,
+                        "title": title,
+                        "price": price_str,
+                        "location": f"{county}, WI",
+                        "link": link,
+                        "source": "LandWatch",
+                        "image_url": image_url,
+                        "map_url": map_url
+                    }
+                    matches.append(item_data)
+                    seen_ids.add(full_id)
+                    save_seen_id(full_id)
 
-                search_query = urllib.parse.quote(f"{title}, {county}, WI")
-                map_url = f"https://www.google.com/maps/search/?api=1&query={search_query}"
-
-                item_data = {
-                    "id": full_id,
-                    "title": title,
-                    "price": price_str,
-                    "location": f"{county}, WI",
-                    "link": link,
-                    "source": "LandWatch",
-                    "image_url": image_url,
-                    "map_url": map_url
-                }
-                matches.append(item_data)
-                seen_ids.add(full_id)
-                save_seen_id(full_id)
-
-            print(f"    New LandWatch matches: {len(matches)} | Skipped: {filtered_price} over $300k, {filtered_seen} already seen, {filtered_no_price} missing price")
+            print(f"    New LandWatch matches found for {county}: {len(matches)}")
 
         except Exception as e:
             print(f"    [ERROR] LandWatch exception for {county}: {e}")
@@ -305,95 +339,4 @@ def send_email_alert(matches):
     count = len(matches)
     first_match = matches[0]
 
-    subject = f"🌾 Land Alert: {first_match['price']} | {first_match['title']}"
-    if count > 1:
-        subject = f"🌾 {count} New Land Listings Found!"
-
-    html_content = f"""
-    <html>
-    <body style="font-family: Arial, sans-serif; background-color: #f1f5f9; padding: 20px 10px; color: #333;">
-        <div style="max-width: 600px; margin: auto; background-color: #ffffff; border-radius: 8px; padding: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.08);">
-            <h2 style="background-color: #15803d; color: white; padding: 14px; border-radius: 6px; text-align: center; margin-top: 0;">
-                🌾 New Land / Acreage Alert ({count})
-            </h2>
-            <p style="color: #475569; font-size: 14px;">The following new land listing(s) under $300,000 were found:</p>
-            <hr style="border: 0; border-top: 1px solid #e2e8f0; margin-bottom: 20px;">
-    """
-
-    for item in matches:
-        img_src = item.get("image_url") or "https://via.placeholder.com/150?text=No+Photo"
-
-        html_content += f"""
-        <div style="border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 20px; background-color: #f8fafc;">
-            <table width="100%" border="0" cellspacing="0" cellpadding="0">
-                <tr>
-                    <td width="130" valign="top" style="padding-right: 14px;">
-                        <img src="{img_src}" alt="Property" width="120" height="90" style="border-radius: 6px; object-fit: cover; display: block; border: 1px solid #cbd5e1;">
-                    </td>
-                    <td valign="top">
-                        <span style="background-color: #16a34a; color: white; padding: 2px 8px; font-size: 11px; border-radius: 4px; font-weight: bold; text-transform: uppercase;">
-                            {item['source']}
-                        </span>
-                        <h3 style="margin: 6px 0 4px 0; color: #0f172a; font-size: 16px; line-height: 1.2;">{item['title']}</h3>
-                        <p style="margin: 2px 0; font-size: 14px;"><strong>Price:</strong> <span style="color: #16a34a; font-weight: bold;">{item['price']}</span></p>
-                        <p style="margin: 2px 0; font-size: 13px; color: #64748b;"><strong>Area:</strong> {item['location']}</p>
-                    </td>
-                </tr>
-            </table>
-
-            <div style="margin-top: 14px; padding-top: 12px; border-top: 1px solid #e2e8f0; display: flex; gap: 8px;">
-                <a href="{item['link']}" target="_blank" style="background-color: #15803d; color: white; text-decoration: none; padding: 8px 14px; border-radius: 5px; font-size: 13px; font-weight: bold;">
-                    View Listing &rarr;
-                </a>
-                <a href="{item['map_url']}" target="_blank" style="background-color: #475569; color: white; text-decoration: none; padding: 8px 14px; border-radius: 5px; font-size: 13px;">
-                    📍 Google Maps
-                </a>
-            </div>
-        </div>
-        """
-
-    html_content += """
-            <p style="font-size: 12px; color: #94a3b8; text-align: center; margin-top: 24px;">
-                WI Land Property Monitor • Automated GitHub Action
-            </p>
-        </div>
-    </body>
-    </html>
-    """
-
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = EMAIL_SENDER
-    msg["To"] = EMAIL_RECEIVER
-    msg.attach(MIMEText(html_content, "html"))
-
-    try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-            server.sendmail(EMAIL_SENDER, EMAIL_RECEIVER, msg.as_string())
-        print(f"Email alert sent successfully for {count} land match(es)!")
-    except Exception as e:
-        print(f"Failed to send email alert: {e}")
-
-
-# ==========================================
-# MAIN RUNNER
-# ==========================================
-def main():
-    seen_ids = load_seen_ids()
-
-    all_matches = []
-    all_matches.extend(scrape_craigslist(seen_ids))
-    all_matches.extend(scrape_landwatch(seen_ids))
-
-    print(f"\nScan complete. Total new land matches found: {len(all_matches)}")
-
-    if all_matches:
-        save_to_csv(all_matches, CSV_FILE)
-        send_email_alert(all_matches)
-    else:
-        print("No new land listings found on this run.")
-
-
-if __name__ == "__main__":
-    main()
+    subject = f"🌾 Land
