@@ -14,8 +14,7 @@ from curl_cffi import requests as curl_requests
 # CONFIGURATION
 # ==========================================
 TARGET_COUNTIES = ["barron", "polk", "dunn"]
-KEY_WORDS = ["land", "acre", "acres", "acreage", "lot", "parcel", "waterfront", "river", "farm", "farmland"]
-MAX_LAND_PRICE = 300000  # $300,000 max budget
+MAX_LAND_PRICE = 300000  # $300,000 budget cap
 
 # 1. CRAIGSLIST (Vacant Land Category)
 CRAIGSLIST_SITES = [
@@ -199,128 +198,67 @@ def scrape_landwatch(seen_ids):
 
             soup = BeautifulSoup(res.text, "html.parser")
             
-            # 1. Parse JSON-LD metadata for structured properties
-            found_via_json = False
-            json_scripts = soup.find_all("script", type="application/ld+json")
-            for script in json_scripts:
-                if not script.string:
-                    continue
-                try:
-                    data = json.loads(script.string)
-                    items = []
-                    if isinstance(data, list):
-                        items = data
-                    elif isinstance(data, dict):
-                        items = data.get("itemListElement", [data])
+            # Select link wrappers for properties
+            card_links = soup.select('a[href*="/wisconsin-land-for-sale/"]')
+            filtered_seen = 0
+            filtered_price = 0
+            filtered_no_price = 0
 
-                    for entry in items:
-                        item_obj = entry.get("item", entry) if isinstance(entry, dict) else {}
-                        if item_obj.get("@type") not in ["SingleFamilyResidence", "Product", "Place", "Offer"]:
-                            continue
-
-                        link = item_obj.get("url") or item_obj.get("mainEntityOfPage") or ""
-                        if not link or "/wisconsin-land-for-sale/" not in link:
-                            continue
-
-                        # Extract property ID
-                        id_match = re.search(r'/pid/(\d+)', link) or re.search(r'/id/(\d+)', link) or re.search(r'-(\d+)$', link)
-                        prop_id = id_match.group(1) if id_match else re.sub(r'[^a-zA-Z0-9]', '', link.split("?")[0])
-
-                        full_id = f"landwatch_{prop_id}"
-                        if full_id in seen_ids:
-                            continue
-
-                        title = item_obj.get("name") or f"Land Lot in {county}"
-                        
-                        # Price extraction from JSON-LD
-                        offers = item_obj.get("offers", {})
-                        raw_price = offers.get("price") if isinstance(offers, dict) else None
-                        
-                        if raw_price:
-                            num_price = float(raw_price)
-                            price_str = f"${num_price:,.0f}"
-                        else:
-                            price_str = "N/A"
-                            num_price = None
-
-                        if num_price is not None and num_price > MAX_LAND_PRICE:
-                            continue
-
-                        img_url = item_obj.get("image") or ""
-                        if isinstance(img_url, list) and len(img_url) > 0:
-                            img_url = img_url[0]
-
-                        search_query = urllib.parse.quote(f"{title}, {county}, WI")
-                        map_url = f"https://www.google.com/maps/search/?api=1&query={search_query}"
-
-                        item_data = {
-                            "id": full_id,
-                            "title": title[:80],
-                            "price": price_str,
-                            "location": f"{county}, WI",
-                            "link": link,
-                            "source": "LandWatch",
-                            "image_url": img_url if isinstance(img_url, str) else "",
-                            "map_url": map_url
-                        }
-                        matches.append(item_data)
-                        seen_ids.add(full_id)
-                        save_seen_id(full_id)
-                        found_via_json = True
-
-                except Exception:
+            for card in card_links:
+                href = card.get("href", "")
+                if not href or "/wisconsin-land-for-sale/" not in href:
                     continue
 
-            # 2. Fallback: Parse card blocks directly if JSON-LD isn't present
-            if not found_via_json:
-                cards = soup.select('a[href*="/wisconsin-land-for-sale/"]')
-                for card in cards:
-                    href = card.get("href", "")
-                    if not href or "/wisconsin-land-for-sale/" not in href:
-                        continue
+                link = f"https://www.landwatch.com{href}" if href.startswith("/") else href
+                card_text = card.get_text(" ", strip=True)
 
-                    link = f"https://www.landwatch.com{href}" if href.startswith("/") else href
-                    card_text = card.get_text(" ", strip=True)
+                # Skip header/footer navigation links that lack price figures
+                price_match = re.search(r'\$[\d,]+', card_text)
+                if not price_match:
+                    filtered_no_price += 1
+                    continue
 
-                    price_match = re.search(r'\$[\d,]+', card_text)
-                    if not price_match:
-                        continue
+                price_str = price_match.group(0)
+                num_price = parse_price(price_str)
 
-                    price_str = price_match.group(0)
-                    num_price = parse_price(price_str)
+                # Strict budget cap enforcer
+                if num_price is None or num_price > MAX_LAND_PRICE:
+                    filtered_price += 1
+                    continue
 
-                    if num_price is None or num_price > MAX_LAND_PRICE:
-                        continue
+                id_match = re.search(r'/pid/(\d+)', href) or re.search(r'/id/(\d+)', href) or re.search(r'-(\d+)$', href)
+                prop_id = id_match.group(1) if id_match else re.sub(r'[^a-zA-Z0-9]', '', href.split("?")[0])
 
-                    id_match = re.search(r'/pid/(\d+)', href) or re.search(r'/id/(\d+)', href) or re.search(r'-(\d+)$', href)
-                    prop_id = id_match.group(1) if id_match else re.sub(r'[^a-zA-Z0-9]', '', href.split("?")[0])
+                if not prop_id:
+                    continue
 
-                    full_id = f"landwatch_{prop_id}"
-                    if full_id in seen_ids:
-                        continue
+                full_id = f"landwatch_{prop_id}"
+                if full_id in seen_ids:
+                    filtered_seen += 1
+                    continue
 
-                    title = re.sub(r'\s+', ' ', card_text)[:80]
-                    img_elem = card.find("img")
-                    image_url = (img_elem.get("src") or img_elem.get("data-src") or "") if img_elem else ""
+                title = re.sub(r'\s+', ' ', card_text)[:80]
+                img_elem = card.find("img")
+                image_url = (img_elem.get("src") or img_elem.get("data-src") or "") if img_elem else ""
 
-                    search_query = urllib.parse.quote(f"{title}, {county}, WI")
-                    map_url = f"https://www.google.com/maps/search/?api=1&query={search_query}"
+                search_query = urllib.parse.quote(f"{title}, {county}, WI")
+                map_url = f"https://www.google.com/maps/search/?api=1&query={search_query}"
 
-                    item_data = {
-                        "id": full_id,
-                        "title": title,
-                        "price": price_str,
-                        "location": f"{county}, WI",
-                        "link": link,
-                        "source": "LandWatch",
-                        "image_url": image_url,
-                        "map_url": map_url
-                    }
-                    matches.append(item_data)
-                    seen_ids.add(full_id)
-                    save_seen_id(full_id)
+                item_data = {
+                    "id": full_id,
+                    "title": title,
+                    "price": price_str,
+                    "location": f"{county}, WI",
+                    "link": link,
+                    "source": "LandWatch",
+                    "image_url": image_url,
+                    "map_url": map_url
+                }
+                matches.append(item_data)
+                seen_ids.add(full_id)
+                save_seen_id(full_id)
 
-            print(f"    New LandWatch matches found for {county}: {len(matches)}")
+            print(f"    Matches found for {county}: {len(matches)} | Skipped: {filtered_price} over $300k, {filtered_seen} already seen, {filtered_no_price} missing price")
 
         except Exception as e:
             print(f"    [ERROR] LandWatch exception for {county}: {e}")
@@ -406,3 +344,26 @@ def send_email_alert(matches):
         print(f"Email alert sent successfully for {count} land match(es)!")
     except Exception as e:
         print(f"Failed to send email alert: {e}")
+
+
+# ==========================================
+# MAIN RUNNER
+# ==========================================
+def main():
+    seen_ids = load_seen_ids()
+
+    all_matches = []
+    all_matches.extend(scrape_craigslist(seen_ids))
+    all_matches.extend(scrape_landwatch(seen_ids))
+
+    print(f"\nScan complete. Total new land matches found: {len(all_matches)}")
+
+    if all_matches:
+        save_to_csv(all_matches, CSV_FILE)
+        send_email_alert(all_matches)
+    else:
+        print("No new land listings found on this run.")
+
+
+if __name__ == "__main__":
+    main()
