@@ -1,372 +1,382 @@
 import os
-import sys
-import json
 import re
+import json
+import csv
 import smtplib
+import urllib.parse
+from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
-# --- ENVIRONMENT VARIABLES & CONFIGURATION ---
-SENDER_EMAIL = os.environ.get("SENDER_EMAIL") or os.environ.get("EMAIL_SENDER")
-SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD") or os.environ.get("EMAIL_PASSWORD")
-RECIPIENT_EMAIL = (
-    os.environ.get("RECEIVER_EMAIL")
-    or os.environ.get("RECIPIENT_EMAIL")
-    or os.environ.get("EMAIL_RECEIVER")
-)
-NEXTDOOR_SESSION_ID = os.environ.get("NEXTDOOR_SESSION_ID")
+# ==========================================
+# CONFIGURATION
+# ==========================================
+MAX_GOLF_CART_PRICE = 10000  # Price cap for golf carts
 
-# Search URLs for Tampa & Sarasota Regions
-CL_SEARCH_URLS = [
-    ("Tampa", "https://tampa.craigslist.org/search/sss?query=golf+cart#search=1~gallery~0~0"),
-    ("Sarasota", "https://sarasota.craigslist.org/search/sss?query=golf+cart#search=1~gallery~0~0")
+# Target keywords to match
+KEY_WORDS = [
+    "yamaha", "drive2", "quietech", "efi", 
+    "ezgo", "e-z-go", "express s4", "club car", 
+    "golf cart", "golf car"
 ]
 
-FB_SEARCH_URLS = [
-    ("Tampa", "https://www.facebook.com/marketplace/tampa/search?query=golf%20cart&exact=false"),
-    ("Sarasota", "https://www.facebook.com/marketplace/sarasota/search?query=golf%20cart&exact=false")
+CRAIGSLIST_URLS = [
+    {"location": "Tampa", "url": "https://tampa.craigslist.org/search/sss?query=golf+cart"},
+    {"location": "Sarasota", "url": "https://sarasota.craigslist.org/search/sss?query=golf+cart"}
 ]
 
-NEXTDOOR_SEARCH_URL = "https://nextdoor.com/search/?query=golf%20cart"
-
-EXCLUDE_KEYWORDS = [
-    "charger", "cover", "enclosure", "tire", "wheel", "rim", 
-    "battery", "batteries", "windshield", "seat", "key", "part", "parts",
-    "bag", "push", "pull", "caddy", "trolley", "holder", "rack"
+FB_URLS = [
+    {"location": "Tampa", "url": "https://www.facebook.com/marketplace/tampa/search?query=golf%20cart"},
+    {"location": "Sarasota", "url": "https://www.facebook.com/marketplace/sarasota/search?query=golf%20cart"}
 ]
 
-def parse_price_num(price_str):
-    """Converts a price string like '$3,500' or '3500' to a float like 3500.0. Returns None if unparseable."""
-    if not price_str or price_str == "N/A":
+NEXTDOOR_URLS = [
+    {"location": "Tampa/Sarasota Area", "url": "https://nextdoor.com/for_sale_and_free/?query=golf%20cart"}
+]
+
+SEEN_FILE = "seen_carts.json"
+CSV_FILE = "matched_carts.csv"
+STORAGE_STATE_FILE = "fb_state.json"
+
+EMAIL_SENDER = os.environ.get("SENDER_EMAIL") or os.environ.get("EMAIL_SENDER")
+EMAIL_PASSWORD = os.environ.get("SENDER_PASSWORD") or os.environ.get("EMAIL_PASSWORD")
+EMAIL_RECEIVER = os.environ.get("RECIPIENT_EMAIL") or os.environ.get("EMAIL_RECEIVER")
+
+
+# ==========================================
+# HELPERS
+# ==========================================
+def parse_price(price_str):
+    if not price_str or any(w in str(price_str).upper() for w in ["N/A", "FREE", "CONTACT"]):
         return None
-    # Strip everything except numbers and decimal points
-    cleaned = re.sub(r"[^\d.]", "", price_str)
+    match = re.search(r'\$?\s*([\d,]+(?:\.\d+)?)', str(price_str))
+    if not match:
+        return None
     try:
-        return float(cleaned)
+        return float(match.group(1).replace(',', ''))
     except ValueError:
         return None
 
+
+def load_seen_items():
+    if not os.path.exists(SEEN_FILE):
+        return {}
+    try:
+        with open(SEEN_FILE, "r") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_seen_items(seen_data):
+    with open(SEEN_FILE, "w") as f:
+        json.dump(seen_data, f, indent=2)
+
+
 def extract_fb_id(url):
-    """Extracts purely numerical Facebook Marketplace Item ID to prevent duplicate alerts."""
-    match = re.search(r'/marketplace/item/(\d+)', url)
+    match = re.search(r'/item/(\d+)', url)
     if match:
         return f"fb_{match.group(1)}"
     return None
 
-def load_seen_items(filename="seen_golf_cart_ids.json"):
-    if os.path.exists(filename):
-        try:
-            with open(filename, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, list):
-                    return {item_id: "N/A" for item_id in data}
-                return data
-        except Exception:
-            return {}
-    return {}
-
-def save_seen_items(seen_dict, filename="seen_golf_cart_ids.json"):
-    with open(filename, "w", encoding="utf-8") as f:
-        json.dump(seen_dict, f, indent=2)
 
 def is_valid_cart(title):
+    if not title:
+        return False
     title_lower = title.lower()
+    return any(k in title_lower for k in KEY_WORDS)
+
+
+def process_item_match(item_id, title, price_str, link, source, seen_items, new_matches):
+    num_price = parse_price(price_str)
     
-    # Accept if title has both 'golf' and 'cart', OR popular golf cart brand names
-    has_cart_term = ("golf" in title_lower and "cart" in title_lower) or \
-                    any(brand in title_lower for brand in ["ezgo", "ez-go", "club car", "yamaha", "icon", "evolution"])
-    
-    if not has_cart_term:
+    # Filter out items above budget cap
+    if num_price is not None and num_price > MAX_GOLF_CART_PRICE:
         return False
 
-    # Exclude parts/accessories unless sold 'with charger' / 'w/ charger'
-    for word in EXCLUDE_KEYWORDS:
-        if f" {word}" in title_lower or f"{word}s" in title_lower or title_lower.startswith(word):
-            if "with charger" in title_lower or "w/ charger" in title_lower:
-                continue
-            return False
-            
+    # Price drop or new listing check
+    if item_id in seen_items:
+        old_price_str = seen_items[item_id].get("price", "")
+        old_num_price = parse_price(old_price_str)
+        
+        # Check for price reduction
+        if num_price and old_num_price and num_price < old_num_price:
+            print(f"  [PRICE DROP] {title} reduced from {old_price_str} to {price_str}")
+            item_data = {
+                "id": item_id,
+                "title": f"[PRICE DROP] {title}",
+                "price": price_str,
+                "old_price": old_price_str,
+                "location": source,
+                "link": link,
+                "source": source
+            }
+            new_matches.append(item_data)
+            seen_items[item_id]["price"] = price_str
+            save_seen_items(seen_items)
+            return True
+        return False
+
+    # Brand new listing
+    item_data = {
+        "id": item_id,
+        "title": title,
+        "price": price_str,
+        "location": source,
+        "link": link,
+        "source": source
+    }
+    new_matches.append(item_data)
+    seen_items[item_id] = {"title": title, "price": price_str, "date": datetime.now().isoformat()}
+    save_seen_items(seen_items)
     return True
 
-def process_item_match(item_id, title, price, clean_link, source, seen_items, new_matches):
-    """Handles logic for determining if an item is NEW, a PRICE DROP, or ignored."""
-    new_price_num = parse_price_num(price)
-    
-    if item_id not in seen_items:
-        # Brand new item
-        seen_items[item_id] = price
-        new_matches.append({
-            "source": source,
-            "id": item_id,
-            "title": title,
-            "price": price,
-            "link": clean_link,
-            "status": "NEW"
-        })
-        return True
-    else:
-        old_price_str = seen_items[item_id]
-        old_price_num = parse_price_num(old_price_str)
 
-        # Check if there is a valid numeric comparison indicating a TRUE price drop
-        if new_price_num is not None and old_price_num is not None:
-            if new_price_num < old_price_num:
-                seen_items[item_id] = price  # Update stored price to lower price
-                new_matches.append({
-                    "source": source,
-                    "id": item_id,
-                    "title": title,
-                    "price": f"{price} (Was {old_price_str})",
-                    "link": clean_link,
-                    "status": "PRICE DROP"
-                })
-                return True
-            elif new_price_num > old_price_num:
-                # Update stored price silently if price went up, no notification
-                seen_items[item_id] = price
-        elif old_price_str != price and price != "N/A":
-            # Fallback if non-numeric string formatting changed
-            seen_items[item_id] = price
-
-    return False
-
-def send_email_notification(new_matches):
-    if not SENDER_EMAIL or not SENDER_PASSWORD or not RECIPIENT_EMAIL:
-        print("Email configuration missing. Skipping email dispatch.")
-        return
-
-    subject = f"Tampa Golf Cart Alert: {len(new_matches)} Update(s) Found!"
-    
-    # Sort matches by source so you can clearly see CL vs FB vs Nextdoor
-    sorted_matches = sorted(new_matches, key=lambda x: x['source'])
-    
-    body = f"<h2>Golf Cart Updates ({len(sorted_matches)} total):</h2><ul>"
-    for item in sorted_matches:
-        status_tag = f"<strong style='color:red;'>[{item.get('status', 'NEW')}]</strong> " if item.get('status') != "NEW" else ""
-        source_tag = f"<strong>[{item.get('source', 'Unknown')}]</strong>"
-        title_text = item.get('title', 'No Title')
-        price_text = item.get('price', 'N/A')
-        link_url = item.get('link', '#')
-        
-        body += f"<li>{status_tag}{source_tag} {title_text} - {price_text}<br><a href='{link_url}'>View Listing</a></li><br>"
-    body += "</ul>"
-
-    msg = MIMEMultipart()
-    msg['From'] = SENDER_EMAIL
-    msg['To'] = RECIPIENT_EMAIL
-    msg['Subject'] = subject
-    msg.attach(MIMEText(body, 'html'))
-
-    try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(SENDER_EMAIL, SENDER_PASSWORD)
-            server.send_message(msg)
-        print(f"Email alert sent successfully with {len(sorted_matches)} listings!")
-    except Exception as e:
-        print(f"Failed to send email alert: {e}")
-
-def run_scraper():
+# ==========================================
+# MAIN SCRAPER
+# ==========================================
+def run_golf_cart_scraper():
+    print("Starting Playwright Scraper for FB, Craigslist, and Nextdoor...")
     seen_items = load_seen_items()
     new_matches = []
 
-    print("Starting Playwright Scraper for FB, Craigslist, and Nextdoor...")
     with sync_playwright() as p:
+        # Launch browser engine
         browser = p.chromium.launch(
             headless=True,
             args=["--no-sandbox", "--disable-setuid-sandbox"]
         )
 
-        context_args = {
-            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-            "viewport": {'width': 1280, 'height': 800}
+        # Load storage state for Facebook session if available
+        context_kwargs = {
+            "viewport": {"width": 1280, "height": 800},
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
+        if os.path.exists(STORAGE_STATE_FILE):
+            context_kwargs["storage_state"] = STORAGE_STATE_FILE
+            print("Loaded Facebook storage state successfully.")
 
-        if os.path.exists("storage_state.json"):
-            try:
-                with open("storage_state.json", "r", encoding="utf-8") as f:
-                    state_data = json.load(f)
-                
-                for cookie in state_data.get("cookies", []):
-                    exp = cookie.get("expires")
-                    if exp is not None and float(exp) > 0:
-                        exp_float = float(exp)
-                        if exp_float > 32503680000:
-                            exp_float = exp_float / 1000.0
-                        cookie["expires"] = int(exp_float)
-                    else:
-                        cookie["expires"] = -1
-                    
-                    cookie["secure"] = bool(cookie.get("secure"))
-                    cookie["httpOnly"] = bool(cookie.get("httpOnly"))
-
-                context_args["storage_state"] = state_data
-                print("Loaded Facebook storage state successfully.")
-            except Exception as e:
-                print(f"Warning: Failed to load storage_state.json: {e}")
-
-        context = browser.new_context(**context_args)
+        context = browser.new_context(**context_kwargs)
         page = context.new_page()
 
-        # --- 1. SCRAPE CRAIGSLIST (TAMPA & SARASOTA) ---
+        # ------------------------------------------
+        # 1. CRAIGSLIST SCRAPER
+        # ------------------------------------------
         print("Scraping Craigslist (Tampa & Sarasota)...")
         cl_added = 0
-        for location, cl_url in CL_SEARCH_URLS:
+        for entry in CRAIGSLIST_URLS:
+            loc = entry["location"]
+            print(f"Checking {loc} Craigslist...")
             try:
-                print(f"Checking {location} Craigslist...")
-                page.goto(cl_url, wait_until="networkidle", timeout=30000)
-                page.wait_for_timeout(3000)
+                page.goto(entry["url"], wait_until="domcontentloaded", timeout=20000)
                 
-                cl_items = page.locator('.cl-search-result, .gallery-card, .cl-static-search-result').all()
-                print(f"Found {len(cl_items)} raw {location} Craigslist result items.")
+                # Expand results in Playwright DOM
+                items = page.query_selector_all('li.cl-search-result, li.result-row')
+                print(f"Found {len(items)} raw {loc} Craigslist result items.")
 
-                for item in cl_items[:30]:
-                    try:
-                        title_el = item.locator('a.title, a.cl-app-anchor, .title').first
-                        if not title_el.is_visible():
-                            continue
-                        
-                        title = title_el.inner_text().strip()
-                        href = title_el.get_attribute("href")
-                        
-                        price_el = item.locator('.price, .priceinfo').first
-                        price = price_el.inner_text().strip() if price_el.is_visible() else "N/A"
-
-                        if not href or not title or not is_valid_cart(title):
-                            continue
-
-                        domain = "sarasota" if location == "Sarasota" else "tampa"
-                        clean_link = href if href.startswith("http") else f"https://{domain}.craigslist.org{href}"
-                        item_id = f"cl_{clean_link.split('/')[-1].replace('.html', '')}"
-
-                        if process_item_match(item_id, title, price, clean_link, f"Craigslist ({location})", seen_items, new_matches):
-                            cl_added += 1
-
-                    except Exception:
+                for item in items:
+                    a_elem = item.query_selector('a.title, a.posting-title, a.main-link, a')
+                    if not a_elem:
                         continue
+                    
+                    link = a_elem.get_attribute("href") or ""
+                    title = a_elem.inner_text().strip()
+
+                    # Extract Craigslist PID
+                    post_id = item.get_attribute("data-pid")
+                    if not post_id:
+                        id_match = re.search(r'/(\d+)\.html', link)
+                        post_id = id_match.group(1) if id_match else None
+
+                    if not post_id:
+                        continue
+
+                    full_id = f"cl_cart_{post_id}"
+
+                    price_elem = item.query_selector('.price, .property-price')
+                    price_str = price_elem.inner_text().strip() if price_elem else "N/A"
+
+                    if not is_valid_cart(title):
+                        continue
+
+                    if process_item_match(full_id, title, price_str, link, f"Craigslist ({loc})", seen_items, new_matches):
+                        cl_added += 1
+
             except Exception as e:
-                print(f"Error scraping {location} Craigslist: {e}")
+                print(f"Error scraping {loc} Craigslist: {e}")
 
         print(f"Craigslist section added {cl_added} total items to notification queue.")
 
-        # --- 2. SCRAPE FACEBOOK MARKETPLACE (TAMPA & SARASOTA) ---
+        # ------------------------------------------
+        # 2. FACEBOOK MARKETPLACE SCRAPER
+        # ------------------------------------------
         print("Scraping Facebook Marketplace (Tampa & Sarasota)...")
         fb_added = 0
-        for location, fb_url in FB_SEARCH_URLS:
+        for entry in FB_URLS:
+            loc = entry["location"]
+            print(f"Checking {loc} Facebook Marketplace...")
             try:
-                print(f"Checking {location} Facebook Marketplace...")
-                page.goto(fb_url, wait_until="domcontentloaded", timeout=30000)
-                page.wait_for_timeout(4000)
+                page.goto(entry["url"], wait_until="networkidle", timeout=25000)
+                
+                # Wait for live card elements in DOM
+                try:
+                    page.wait_for_selector('a[href*="/marketplace/item/"]', timeout=8000)
+                except Exception:
+                    print(f"    [DEBUG] Timed out waiting for Facebook item links in {loc}.")
 
-                # Retry up to 3 times to clear stubborn login overlays
-                for _ in range(3):
-                    page.keyboard.press("Escape")
-                    page.wait_for_timeout(500)
-                    
-                    close_btn = page.query_selector("div[aria-label='Close'], div[role='dialog'] div[aria-label='Close'], [aria-label='Decline']")
-                    if close_btn:
-                        try:
-                            close_btn.click(force=True)
-                            print(f"Dismissed Facebook login pop-up for {location}!")
-                        except Exception:
-                            pass
-                    page.wait_for_timeout(1000)
+                card_elements = page.query_selector_all('a[href*="/marketplace/item/"]')
+                print(f"Found {len(card_elements)} Facebook Marketplace cards for {loc}.")
 
-                page.evaluate("window.scrollBy(0, 1000);")
-                page.wait_for_timeout(3000)
-
-                page.screenshot(path=f"fb_debug_{location.lower()}.png")
-
-                soup_fb = BeautifulSoup(page.content(), "html.parser")
-                fb_cards = soup_fb.find_all("a", href=lambda href: href and "/marketplace/item/" in href)
-                print(f"Found {len(fb_cards)} Facebook Marketplace cards for {location}.")
-
-                for card in fb_cards:
-                    raw_href = card["href"]
+                for elem in card_elements:
+                    raw_href = elem.get_attribute("href") or ""
                     item_id = extract_fb_id(raw_href)
                     if not item_id:
                         continue
 
                     clean_link = f"https://www.facebook.com/marketplace/item/{item_id.replace('fb_', '')}/"
-                    card_text = [t.strip() for t in card.stripped_strings if t.strip()]
+
+                    raw_text = elem.inner_text().strip()
+                    card_text = [t.strip() for t in raw_text.split("\n") if t.strip()]
                     if not card_text:
                         continue
 
+                    # Extract price and title from card text lines
                     price = card_text[0] if "$" in card_text[0] else ("N/A" if not any("$" in t for t in card_text) else next(t for t in card_text if "$" in t))
                     title = card_text[1] if len(card_text) > 1 and card_text[1] != price else card_text[0]
 
                     if not is_valid_cart(title):
                         continue
 
-                    if process_item_match(item_id, title, price, clean_link, f"Facebook ({location})", seen_items, new_matches):
+                    if process_item_match(item_id, title, price, clean_link, f"Facebook ({loc})", seen_items, new_matches):
                         fb_added += 1
 
             except Exception as e:
-                print(f"Error scraping {location} Facebook Marketplace: {e}")
+                print(f"Error scraping {loc} Facebook Marketplace: {e}")
 
         print(f"Facebook section added {fb_added} total items to notification queue.")
 
-        # --- 3. SCRAPE NEXTDOOR ---
-        if NEXTDOOR_SESSION_ID:
-            print("Scraping Nextdoor For Sale & Free...")
-            nd_added = 0
+        # ------------------------------------------
+        # 3. NEXTDOOR SCRAPER
+        # ------------------------------------------
+        print("Scraping Nextdoor For Sale & Free...")
+        nd_added = 0
+        for entry in NEXTDOOR_URLS:
+            loc = entry["location"]
             try:
-                nd_page = context.new_page()
-                nd_page.set_extra_http_headers({"Cookie": f"ndbr_at={NEXTDOOR_SESSION_ID.strip()}"})
+                page.goto(entry["url"], wait_until="domcontentloaded", timeout=20000)
                 
-                nd_page.goto(NEXTDOOR_SEARCH_URL, wait_until="domcontentloaded", timeout=30000)
-                nd_page.wait_for_timeout(3000)
-
-                for _ in range(2):
-                    nd_page.evaluate("window.scrollBy(0, 1000);")
-                    nd_page.wait_for_timeout(2000)
-
-                nd_cards = nd_page.locator('a[href*="/for_sale_and_free/"], a[href*="/post/"]').all()
+                # Target Nextdoor item elements
+                nd_cards = page.query_selector_all('div[data-testid="item-card"], a[href*="/for_sale_and_free/"]')
                 print(f"Found {len(nd_cards)} raw Nextdoor elements.")
 
                 for card in nd_cards:
-                    try:
-                        href = card.get_attribute("href")
-                        text = card.inner_text().strip()
-                        lines = [line.strip() for line in text.split("\n") if line.strip()]
-                        
-                        if not href or not lines:
-                            continue
-                        
-                        price = next((l for l in lines if "$" in l), "N/A")
-                        title = lines[0] if lines[0] != price else (lines[1] if len(lines) > 1 else "Nextdoor Item")
-
-                        if not is_valid_cart(title):
-                            continue
-
-                        clean_link = href if href.startswith("http") else f"https://nextdoor.com{href.split('?')[0]}"
-                        item_id = f"nd_{clean_link.split('/')[-1].strip('/')}"
-
-                        if process_item_match(item_id, title, price, clean_link, "Nextdoor", seen_items, new_matches):
-                            nd_added += 1
-
-                    except Exception:
+                    raw_text = card.inner_text().strip()
+                    card_text = [t.strip() for t in raw_text.split("\n") if t.strip()]
+                    if not card_text:
                         continue
-                print(f"Nextdoor section added {nd_added} items to notification queue.")
-                nd_page.close()
+
+                    a_elem = card.query_selector('a[href]') if card.name != "a" else card
+                    link = a_elem.get_attribute("href") if a_elem else ""
+                    if not link:
+                        continue
+
+                    full_link = f"https://nextdoor.com{link}" if link.startswith("/") else link
+                    
+                    id_match = re.search(r'/(\d+)', link)
+                    nd_id = f"nd_{id_match.group(1)}" if id_match else f"nd_{hash(full_link)}"
+
+                    price = next((t for t in card_text if "$" in t), "N/A")
+                    title = card_text[0] if card_text[0] != price else (card_text[1] if len(card_text) > 1 else "Nextdoor Golf Cart")
+
+                    if not is_valid_cart(title):
+                        continue
+
+                    if process_item_match(nd_id, title, price, full_link, f"Nextdoor ({loc})", seen_items, new_matches):
+                        nd_added += 1
+
             except Exception as e:
                 print(f"Error scraping Nextdoor: {e}")
-        else:
-            print("NEXTDOOR_SESSION_ID missing. Skipping Nextdoor.")
 
+        print(f"Nextdoor section added {nd_added} items to notification queue.")
         browser.close()
 
-    print(f"Scan complete. Total queue length for email dispatch: {len(new_matches)}")
-
+    print(f"\nScan complete. Total queue length for email dispatch: {len(new_matches)}")
     print(f"DEBUG - Currently stored seen items count: {len(seen_items)}")
     print(f"DEBUG - Matches queued for email: {new_matches}")
-    
+
     if new_matches:
-        save_seen_items(seen_items)
-        send_email_notification(new_matches)
+        send_email_alert(new_matches)
     else:
         print("No new listings or price drops on this run.")
 
+
+# ==========================================
+# EMAIL NOTIFICATIONS
+# ==========================================
+def send_email_alert(matches):
+    if not EMAIL_SENDER or not EMAIL_PASSWORD or not EMAIL_RECEIVER:
+        print("Email credentials missing. Skipping email send.")
+        return
+
+    count = len(matches)
+    first_match = matches[0]
+
+    subject = f"🛺 Golf Cart Alert: {first_match['price']} | {first_match['title']}"
+    if count > 1:
+        subject = f"🛺 {count} New Golf Cart Matches Found!"
+
+    html_content = f"""
+    <html>
+    <body style="font-family: Arial, sans-serif; background-color: #f1f5f9; padding: 20px 10px; color: #333;">
+        <div style="max-width: 600px; margin: auto; background-color: #ffffff; border-radius: 8px; padding: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.08);">
+            <h2 style="background-color: #2563eb; color: white; padding: 14px; border-radius: 6px; text-align: center; margin-top: 0;">
+                🛺 Golf Cart Listing Alert ({count})
+            </h2>
+            <p style="color: #475569; font-size: 14px;">New golf cart listings or price drops in Tampa / Sarasota:</p>
+            <hr style="border: 0; border-top: 1px solid #e2e8f0; margin-bottom: 20px;">
+    """
+
+    for item in matches:
+        html_content += f"""
+        <div style="border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 16px; background-color: #f8fafc;">
+            <span style="background-color: #2563eb; color: white; padding: 2px 8px; font-size: 11px; border-radius: 4px; font-weight: bold; text-transform: uppercase;">
+                {item['source']}
+            </span>
+            <h3 style="margin: 8px 0 4px 0; color: #0f172a; font-size: 16px;">{item['title']}</h3>
+            <p style="margin: 2px 0; font-size: 14px;"><strong>Price:</strong> <span style="color: #16a34a; font-weight: bold;">{item['price']}</span></p>
+            <div style="margin-top: 12px;">
+                <a href="{item['link']}" target="_blank" style="background-color: #2563eb; color: white; text-decoration: none; padding: 8px 14px; border-radius: 5px; font-size: 13px; font-weight: bold; display: inline-block;">
+                    View Listing &rarr;
+                </a>
+            </div>
+        </div>
+        """
+
+    html_content += """
+            <p style="font-size: 12px; color: #94a3b8; text-align: center; margin-top: 24px;">
+                Tampa/Sarasota Golf Cart Monitor • Automated GitHub Action
+            </p>
+        </div>
+    </body>
+    </html>
+    """
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = EMAIL_SENDER
+    msg["To"] = EMAIL_RECEIVER
+    msg.attach(MIMEText(html_content, "html"))
+
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+            server.sendmail(EMAIL_SENDER, EMAIL_RECEIVER, msg.as_string())
+        print(f"Email alert sent successfully for {count} golf cart match(es)!")
+    except Exception as e:
+        print(f"Failed to send email alert: {e}")
+
+
 if __name__ == "__main__":
-    run_scraper()
+    run_golf_cart_scraper()
