@@ -339,4 +339,70 @@ def send_email_alert(matches):
     count = len(matches)
     first_match = matches[0]
 
-    subject = f"🌾 Land
+    subject = f"🌾 {count} New Land Listings Found!" if count > 1 else f"🌾 Land Alert: {first_match['price']} | {first_match['title']}"
+
+    html_content = f"""
+    <html>
+    <body style="font-family: Arial, sans-serif; background-color: #f1f5f9; padding: 20px 10px; color: #333;">
+        <div style="max-width: 600px; margin: auto; background-color: #ffffff; border-radius: 8px; padding: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.08);">
+            <h2 style="background-color: #15803d; color: white; padding: 14px; border-radius: 6px; text-align: center; margin-top: 0;">
+                🌾 New Land / Acreage Alert ({count})
+            </h2>
+            <p style="color: #475569; font-size: 14px;">The following new land listing(s) under $300,000 were found:</p>
+            <hr style="border: 0; border-top: 1px solid #e2e8f0; margin-bottom: 20px;">
+    """
+
+    for item in matches:
+        img_src = item.get("image_url") or "https://via.placeholder.com/150?text=No+Photo"
+
+        html_content += f"""
+        <div style="border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 20px; background-color: #f8fafc;">
+            <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                <tr>
+                    <td width="130" valign="top" style="padding-right: 14px;">
+                        <img src="{img_src}" alt="Property" width="120" height="90" style="border-radius: 6px; object-fit: cover; display: block; border: 1px solid #cbd5e1;">
+                    </td>
+                    <td valign="top">
+                        <span style="background-color: #16a34a; color: white; padding: 2px 8px; font-size: 11px; border-radius: 4px; font-weight: bold; text-transform: uppercase;">
+                            {item['source']}
+                        </span>
+                        <h3 style="margin: 6px 0 4px 0; color: #0f172a; font-size: 16px; line-height: 1.2;">{item['title']}</h3>
+                        <p style="margin: 2px 0; font-size: 14px;"><strong>Price:</strong> <span style="color: #16a34a; font-weight: bold;">{item['price']}</span></p>
+                        <p style="margin: 2px 0; font-size: 13px; color: #64748b;"><strong>Area:</strong> {item['location']}</p>
+                    </td>
+                </tr>
+            </table>
+
+            <div style="margin-top: 14px; padding-top: 12px; border-top: 1px solid #e2e8f0; display: flex; gap: 8px;">
+                <a href="{item['link']}" target="_blank" style="background-color: #15803d; color: white; text-decoration: none; padding: 8px 14px; border-radius: 5px; font-size: 13px; font-weight: bold;">
+                    View Listing &rarr;
+                </a>
+                <a href="{item['map_url']}" target="_blank" style="background-color: #475569; color: white; text-decoration: none; padding: 8px 14px; border-radius: 5px; font-size: 13px;">
+                    📍 Google Maps
+                </a>
+            </div>
+        </div>
+        """
+
+    html_content += """
+            <p style="font-size: 12px; color: #94a3b8; text-align: center; margin-top: 24px;">
+                WI Land Property Monitor • Automated GitHub Action
+            </p>
+        </div>
+    </body>
+    </html>
+    """
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = EMAIL_SENDER
+    msg["To"] = EMAIL_RECEIVER
+    msg.attach(MIMEText(html_content, "html"))
+
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+            server.sendmail(EMAIL_SENDER, EMAIL_RECEIVER, msg.as_string())
+        print(f"Email alert sent successfully for {count} land match(es)!")
+    except Exception as e:
+        print(f"Failed to send email alert: {e}")
