@@ -340,4 +340,38 @@ def send_email_alert(matches):
                 {item['source']}
             </span>
             <h3 style="margin: 8px 0 4px 0; color: #0f172a; font-size: 16px;">{item['title']}</h3>
-            <p style="margin: 2px 0; font-size: 14px;"><strong>Price:</strong> <span style="
+            <p style="margin: 2px 0; font-size: 14px;"><strong>Price:</strong> <span style="color: #16a34a; font-weight: bold;">{item['price']}</span></p>
+            <div style="margin-top: 12px;">
+                <a href="{item['link']}" target="_blank" style="background-color: #2563eb; color: white; text-decoration: none; padding: 8px 14px; border-radius: 5px; font-size: 13px; font-weight: bold; display: inline-block;">
+                    View Listing &rarr;
+                </a>
+            </div>
+        </div>
+        """
+
+    html_content += """
+            <p style="font-size: 12px; color: #94a3b8; text-align: center; margin-top: 24px;">
+                Tampa/Sarasota Golf Cart Monitor • Automated GitHub Action
+            </p>
+        </div>
+    </body>
+    </html>
+    """
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = EMAIL_SENDER
+    msg["To"] = EMAIL_RECEIVER
+    msg.attach(MIMEText(html_content, "html"))
+
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+            server.sendmail(EMAIL_SENDER, EMAIL_RECEIVER, msg.as_string())
+        print(f"Email alert sent successfully for {count} golf cart match(es)!")
+    except Exception as e:
+        print(f"Failed to send email alert: {e}")
+
+
+if __name__ == "__main__":
+    run_golf_cart_scraper()
