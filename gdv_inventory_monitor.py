@@ -365,20 +365,17 @@ def run_gdv_scrape():
     if filtered_items:
         logging.info("--- CURRENT MATCHED GDV RESORTS ---")
         for idx, item in enumerate(filtered_items, 1):
-            resort = item.get("resort_name") or item.get("title") or "Unknown Resort"
-            location = item.get("location") or "N/A"
-            dates = item.get("dates") or item.get("check_in") or "N/A"
-            is_new = "NEW" if item.get("id") not in seen_weeks else "ALREADY SEEN"
+            # Fall back through possible dictionary key names
+            resort = item.get("resort") or item.get("resort_name") or item.get("title") or "Unknown Resort"
+            location = item.get("state") or item.get("location") or item.get("region") or "N/A"
+            dates = item.get("check_in") or item.get("dates") or item.get("date_range") or "N/A"
+            
+            # Check ID against seen weeks
+            item_id = item.get("id") or item.get("link") or ""
+            is_new = "NEW" if item_id not in seen_weeks else "ALREADY SEEN"
+            
             logging.info(f"  {idx}. [{is_new}] {resort} ({location}) - Dates: {dates}")
         logging.info("-----------------------------------")
-
-    # Then send the email alert if there are new matches
-    if new_weeks:
-        logging.info(f"Found {len(new_weeks)} new GDV listings matching criteria!")
-        send_email_notification(new_weeks)
-        save_seen_weeks(seen_weeks)
-    else:
-        logging.info("No new matching GDV inventory found.")
 
 
 if __name__ == "__main__":
