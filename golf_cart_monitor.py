@@ -7,7 +7,6 @@ import urllib.parse
 from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
 # ==========================================
@@ -21,7 +20,6 @@ KEY_WORDS = [
     "golf cart", "golf car", "cart", "buggy"
 ]
 
-# Corrected Craigslist Search Enpoints
 CRAIGSLIST_URLS = [
     {"location": "Tampa", "url": "https://tampa.craigslist.org/search/?query=golf+cart"},
     {"location": "Sarasota", "url": "https://sarasota.craigslist.org/search/?query=golf+cart"}
@@ -172,9 +170,8 @@ def run_golf_cart_scraper():
             print(f"Checking {loc} Craigslist...")
             try:
                 page.goto(entry["url"], wait_until="domcontentloaded", timeout=25000)
-                page.wait_for_timeout(3000)  # Allow JS execution
+                page.wait_for_timeout(3000)
                 
-                # Broad target selector matching cards
                 items = (
                     page.query_selector_all('li.cl-search-result') or 
                     page.query_selector_all('ol.cl-static-search-results li') or 
@@ -184,7 +181,9 @@ def run_golf_cart_scraper():
                 print(f"Found {len(items)} raw {loc} Craigslist result items.")
 
                 for item in items:
-                    a_elem = item.query_selector('a.title, a.posting-title, a.main-link, a') if item.name != 'a' else item
+                    # Fix: Correctly query anchors on Playwright handles
+                    tag_name = item.evaluate("node => node.tagName.toLowerCase()")
+                    a_elem = item if tag_name == "a" else item.query_selector('a.title, a.posting-title, a.main-link, a')
                     if not a_elem:
                         continue
                     
@@ -225,12 +224,9 @@ def run_golf_cart_scraper():
             print(f"Checking {loc} Facebook Marketplace...")
             try:
                 page.goto(entry["url"], wait_until="domcontentloaded", timeout=25000)
-                
-                # Scroll down to trigger GraphQL hydration
                 page.evaluate("window.scrollBy(0, 800)")
                 page.wait_for_timeout(4000)
 
-                # Query card links directly in DOM
                 card_elements = page.query_selector_all('a[href*="/marketplace/item/"]')
                 print(f"Found {len(card_elements)} Facebook Marketplace cards for {loc}.")
 
@@ -282,7 +278,8 @@ def run_golf_cart_scraper():
                     if not card_text:
                         continue
 
-                    a_elem = card.query_selector('a[href]') if card.name != "a" else card
+                    tag_name = card.evaluate("node => node.tagName.toLowerCase()")
+                    a_elem = card if tag_name == "a" else card.query_selector('a[href]')
                     link = a_elem.get_attribute("href") if a_elem else ""
                     if not link:
                         continue
