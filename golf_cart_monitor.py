@@ -21,10 +21,10 @@ KEY_WORDS = [
     "golf cart", "golf car", "cart", "buggy"
 ]
 
-# Updated Craigslist URLs (Direct query endpoints without deprecated category slugs)
+# Corrected Craigslist Search Enpoints
 CRAIGSLIST_URLS = [
-    {"location": "Tampa", "url": "https://tampa.craigslist.org/search/query=golf+cart"},
-    {"location": "Sarasota", "url": "https://sarasota.craigslist.org/search/query=golf+cart"}
+    {"location": "Tampa", "url": "https://tampa.craigslist.org/search/?query=golf+cart"},
+    {"location": "Sarasota", "url": "https://sarasota.craigslist.org/search/?query=golf+cart"}
 ]
 
 FB_URLS = [
@@ -171,14 +171,20 @@ def run_golf_cart_scraper():
             loc = entry["location"]
             print(f"Checking {loc} Craigslist...")
             try:
-                page.goto(entry["url"], wait_until="domcontentloaded", timeout=20000)
-                page.wait_for_timeout(2000)  # Allow results to populate
+                page.goto(entry["url"], wait_until="domcontentloaded", timeout=25000)
+                page.wait_for_timeout(3000)  # Allow JS execution
                 
-                items = page.query_selector_all('ol.cl-static-search-results li, li.cl-search-result, li.result-row')
+                # Broad target selector matching cards
+                items = (
+                    page.query_selector_all('li.cl-search-result') or 
+                    page.query_selector_all('ol.cl-static-search-results li') or 
+                    page.query_selector_all('li.result-row') or
+                    page.query_selector_all('a.cl-app-anchor')
+                )
                 print(f"Found {len(items)} raw {loc} Craigslist result items.")
 
                 for item in items:
-                    a_elem = item.query_selector('a.title, a.posting-title, a.main-link, a')
+                    a_elem = item.query_selector('a.title, a.posting-title, a.main-link, a') if item.name != 'a' else item
                     if not a_elem:
                         continue
                     
@@ -219,7 +225,10 @@ def run_golf_cart_scraper():
             print(f"Checking {loc} Facebook Marketplace...")
             try:
                 page.goto(entry["url"], wait_until="domcontentloaded", timeout=25000)
-                page.wait_for_timeout(3000)
+                
+                # Scroll down to trigger GraphQL hydration
+                page.evaluate("window.scrollBy(0, 800)")
+                page.wait_for_timeout(4000)
 
                 # Query card links directly in DOM
                 card_elements = page.query_selector_all('a[href*="/marketplace/item/"]')
@@ -261,7 +270,8 @@ def run_golf_cart_scraper():
             loc = entry["location"]
             try:
                 page.goto(entry["url"], wait_until="domcontentloaded", timeout=20000)
-                page.wait_for_timeout(2000)
+                page.evaluate("window.scrollBy(0, 600)")
+                page.wait_for_timeout(3000)
                 
                 nd_cards = page.query_selector_all('div[data-testid="item-card"], a[href*="/for_sale_and_free/"]')
                 print(f"Found {len(nd_cards)} raw Nextdoor elements.")
