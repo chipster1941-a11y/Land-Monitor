@@ -15,16 +15,16 @@ from playwright.sync_api import sync_playwright
 # ==========================================
 MAX_GOLF_CART_PRICE = 10000  # Price cap for golf carts
 
-# Target keywords to match
 KEY_WORDS = [
     "yamaha", "drive2", "quietech", "efi", 
     "ezgo", "e-z-go", "express s4", "club car", 
-    "golf cart", "golf car"
+    "golf cart", "golf car", "cart", "buggy"
 ]
 
+# Updated Craigslist URLs (Direct query endpoints without deprecated category slugs)
 CRAIGSLIST_URLS = [
-    {"location": "Tampa", "url": "https://tampa.craigslist.org/search/sss?query=golf+cart"},
-    {"location": "Sarasota", "url": "https://sarasota.craigslist.org/search/sss?query=golf+cart"}
+    {"location": "Tampa", "url": "https://tampa.craigslist.org/search/query=golf+cart"},
+    {"location": "Sarasota", "url": "https://sarasota.craigslist.org/search/query=golf+cart"}
 ]
 
 FB_URLS = [
@@ -96,12 +96,11 @@ def process_item_match(item_id, title, price_str, link, source, seen_items, new_
     if num_price is not None and num_price > MAX_GOLF_CART_PRICE:
         return False
 
-    # Price drop or new listing check
+    # Price drop or existing listing check
     if item_id in seen_items:
         old_price_str = seen_items[item_id].get("price", "")
         old_num_price = parse_price(old_price_str)
         
-        # Check for price reduction
         if num_price and old_num_price and num_price < old_num_price:
             print(f"  [PRICE DROP] {title} reduced from {old_price_str} to {price_str}")
             item_data = {
@@ -119,7 +118,7 @@ def process_item_match(item_id, title, price_str, link, source, seen_items, new_
             return True
         return False
 
-    # Brand new listing
+    # New listing match
     item_data = {
         "id": item_id,
         "title": title,
@@ -143,16 +142,18 @@ def run_golf_cart_scraper():
     new_matches = []
 
     with sync_playwright() as p:
-        # Launch browser engine
         browser = p.chromium.launch(
             headless=True,
-            args=["--no-sandbox", "--disable-setuid-sandbox"]
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-blink-features=AutomationControlled"
+            ]
         )
 
-        # Load storage state for Facebook session if available
         context_kwargs = {
             "viewport": {"width": 1280, "height": 800},
-            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         }
         if os.path.exists(STORAGE_STATE_FILE):
             context_kwargs["storage_state"] = STORAGE_STATE_FILE
@@ -171,9 +172,9 @@ def run_golf_cart_scraper():
             print(f"Checking {loc} Craigslist...")
             try:
                 page.goto(entry["url"], wait_until="domcontentloaded", timeout=20000)
+                page.wait_for_timeout(2000)  # Allow results to populate
                 
-                # Expand results in Playwright DOM
-                items = page.query_selector_all('li.cl-search-result, li.result-row')
+                items = page.query_selector_all('ol.cl-static-search-results li, li.cl-search-result, li.result-row')
                 print(f"Found {len(items)} raw {loc} Craigslist result items.")
 
                 for item in items:
@@ -184,7 +185,6 @@ def run_golf_cart_scraper():
                     link = a_elem.get_attribute("href") or ""
                     title = a_elem.inner_text().strip()
 
-                    # Extract Craigslist PID
                     post_id = item.get_attribute("data-pid")
                     if not post_id:
                         id_match = re.search(r'/(\d+)\.html', link)
@@ -195,7 +195,7 @@ def run_golf_cart_scraper():
 
                     full_id = f"cl_cart_{post_id}"
 
-                    price_elem = item.query_selector('.price, .property-price')
+                    price_elem = item.query_selector('.price, .property-price, span.price')
                     price_str = price_elem.inner_text().strip() if price_elem else "N/A"
 
                     if not is_valid_cart(title):
@@ -218,14 +218,10 @@ def run_golf_cart_scraper():
             loc = entry["location"]
             print(f"Checking {loc} Facebook Marketplace...")
             try:
-                page.goto(entry["url"], wait_until="networkidle", timeout=25000)
-                
-                # Wait for live card elements in DOM
-                try:
-                    page.wait_for_selector('a[href*="/marketplace/item/"]', timeout=8000)
-                except Exception:
-                    print(f"    [DEBUG] Timed out waiting for Facebook item links in {loc}.")
+                page.goto(entry["url"], wait_until="domcontentloaded", timeout=25000)
+                page.wait_for_timeout(3000)
 
+                # Query card links directly in DOM
                 card_elements = page.query_selector_all('a[href*="/marketplace/item/"]')
                 print(f"Found {len(card_elements)} Facebook Marketplace cards for {loc}.")
 
@@ -242,7 +238,6 @@ def run_golf_cart_scraper():
                     if not card_text:
                         continue
 
-                    # Extract price and title from card text lines
                     price = card_text[0] if "$" in card_text[0] else ("N/A" if not any("$" in t for t in card_text) else next(t for t in card_text if "$" in t))
                     title = card_text[1] if len(card_text) > 1 and card_text[1] != price else card_text[0]
 
@@ -266,8 +261,8 @@ def run_golf_cart_scraper():
             loc = entry["location"]
             try:
                 page.goto(entry["url"], wait_until="domcontentloaded", timeout=20000)
+                page.wait_for_timeout(2000)
                 
-                # Target Nextdoor item elements
                 nd_cards = page.query_selector_all('div[data-testid="item-card"], a[href*="/for_sale_and_free/"]')
                 print(f"Found {len(nd_cards)} raw Nextdoor elements.")
 
@@ -345,38 +340,4 @@ def send_email_alert(matches):
                 {item['source']}
             </span>
             <h3 style="margin: 8px 0 4px 0; color: #0f172a; font-size: 16px;">{item['title']}</h3>
-            <p style="margin: 2px 0; font-size: 14px;"><strong>Price:</strong> <span style="color: #16a34a; font-weight: bold;">{item['price']}</span></p>
-            <div style="margin-top: 12px;">
-                <a href="{item['link']}" target="_blank" style="background-color: #2563eb; color: white; text-decoration: none; padding: 8px 14px; border-radius: 5px; font-size: 13px; font-weight: bold; display: inline-block;">
-                    View Listing &rarr;
-                </a>
-            </div>
-        </div>
-        """
-
-    html_content += """
-            <p style="font-size: 12px; color: #94a3b8; text-align: center; margin-top: 24px;">
-                Tampa/Sarasota Golf Cart Monitor • Automated GitHub Action
-            </p>
-        </div>
-    </body>
-    </html>
-    """
-
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = EMAIL_SENDER
-    msg["To"] = EMAIL_RECEIVER
-    msg.attach(MIMEText(html_content, "html"))
-
-    try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-            server.sendmail(EMAIL_SENDER, EMAIL_RECEIVER, msg.as_string())
-        print(f"Email alert sent successfully for {count} golf cart match(es)!")
-    except Exception as e:
-        print(f"Failed to send email alert: {e}")
-
-
-if __name__ == "__main__":
-    run_golf_cart_scraper()
+            <p style="margin: 2px 0; font-size: 14px;"><strong>Price:</strong> <span style="
