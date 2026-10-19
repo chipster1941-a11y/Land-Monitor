@@ -16,8 +16,8 @@ MAX_GOLF_CART_PRICE = 10000  # Price cap for golf carts
 
 KEY_WORDS = [
     "yamaha", "drive2", "quietech", "efi", 
-    "ezgo", "e-z-go", "express s4", "club car", 
-    "golf cart", "golf car", "cart", "buggy"
+    "ezgo", "e-z-go", "express", "club car", "precedent", "ds", "tempo", "onslow",
+    "golf cart", "golf car", "cart", "buggy", "48v", "36v", "gas cart"
 ]
 
 CRAIGSLIST_URLS = [
@@ -181,14 +181,13 @@ def run_golf_cart_scraper():
                 print(f"Found {len(items)} raw {loc} Craigslist result items.")
 
                 for item in items:
-                    # Fix: Correctly query anchors on Playwright handles
                     tag_name = item.evaluate("node => node.tagName.toLowerCase()")
                     a_elem = item if tag_name == "a" else item.query_selector('a.title, a.posting-title, a.main-link, a')
                     if not a_elem:
                         continue
                     
                     link = a_elem.get_attribute("href") or ""
-                    title = a_elem.inner_text().strip()
+                    full_text = item.inner_text().strip().replace("\n", " ")
 
                     post_id = item.get_attribute("data-pid")
                     if not post_id:
@@ -200,10 +199,12 @@ def run_golf_cart_scraper():
 
                     full_id = f"cl_cart_{post_id}"
 
-                    price_elem = item.query_selector('.price, .property-price, span.price')
-                    price_str = price_elem.inner_text().strip() if price_elem else "N/A"
+                    # Extract price from text or element
+                    price_match = re.search(r'\$[\d,]+', full_text)
+                    price_str = price_match.group(0) if price_match else "N/A"
+                    title = a_elem.inner_text().strip() or full_text[:80]
 
-                    if not is_valid_cart(title):
+                    if not is_valid_cart(title) and not is_valid_cart(full_text):
                         continue
 
                     if process_item_match(full_id, title, price_str, link, f"Craigslist ({loc})", seen_items, new_matches):
@@ -224,8 +225,11 @@ def run_golf_cart_scraper():
             print(f"Checking {loc} Facebook Marketplace...")
             try:
                 page.goto(entry["url"], wait_until="domcontentloaded", timeout=25000)
-                page.evaluate("window.scrollBy(0, 800)")
-                page.wait_for_timeout(4000)
+                
+                # Simulate smooth scroll down to hydrate React DOM
+                for _ in range(3):
+                    page.evaluate("window.scrollBy(0, 600)")
+                    page.wait_for_timeout(1000)
 
                 card_elements = page.query_selector_all('a[href*="/marketplace/item/"]')
                 print(f"Found {len(card_elements)} Facebook Marketplace cards for {loc}.")
@@ -246,7 +250,7 @@ def run_golf_cart_scraper():
                     price = card_text[0] if "$" in card_text[0] else ("N/A" if not any("$" in t for t in card_text) else next(t for t in card_text if "$" in t))
                     title = card_text[1] if len(card_text) > 1 and card_text[1] != price else card_text[0]
 
-                    if not is_valid_cart(title):
+                    if not is_valid_cart(title) and not is_valid_cart(" ".join(card_text)):
                         continue
 
                     if process_item_match(item_id, title, price, clean_link, f"Facebook ({loc})", seen_items, new_matches):
@@ -292,7 +296,7 @@ def run_golf_cart_scraper():
                     price = next((t for t in card_text if "$" in t), "N/A")
                     title = card_text[0] if card_text[0] != price else (card_text[1] if len(card_text) > 1 else "Nextdoor Golf Cart")
 
-                    if not is_valid_cart(title):
+                    if not is_valid_cart(title) and not is_valid_cart(" ".join(card_text)):
                         continue
 
                     if process_item_match(nd_id, title, price, full_link, f"Nextdoor ({loc})", seen_items, new_matches):
