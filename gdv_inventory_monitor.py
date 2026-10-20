@@ -210,7 +210,7 @@ def extract_all_resort_cards(page, month_label):
             except Exception as card_err:
                 logging.warning(f"Error parsing card {i} on page {current_page}: {card_err}")
 
-        # Check for GDV pagination buttons (Next button OR numeric next page button)
+        # Check for GDV pagination buttons
         next_page_num = current_page + 1
         next_button = page.locator(
             f"a[id*='Next'], a[id*='lnkNext'], a[id*='lbNext'], "
@@ -269,16 +269,16 @@ def process_target_months(page):
 
                 # 2. Priority locations bypass standard state limits
                 if has_priority_loc:
-                    combined_items.append({"text": item_text, "is_priority": True})
+                    combined_items.append({"text": item_text, "is_priority": True, "target_month": month_label})
                     continue
 
                 # 3. Apply state restrictions based on target month rules
                 if region_rule == "fl_only":
                     if matches_patterns(item_text, FLORIDA_PATTERNS):
-                        combined_items.append({"text": item_text, "is_priority": False})
+                        combined_items.append({"text": item_text, "is_priority": False, "target_month": month_label})
                 elif region_rule == "late_2027_states":
                     if matches_patterns(item_text, LATE_2027_STATES_PATTERNS):
-                        combined_items.append({"text": item_text, "is_priority": False})
+                        combined_items.append({"text": item_text, "is_priority": False, "target_month": month_label})
 
         except Exception as e:
             logging.error(f"Error executing extraction for {month_label}: {e}")
@@ -349,33 +349,36 @@ def run_gdv_scrape():
                 seen_weeks.add(item_id)
                 new_weeks.append({
                     "clean_title": item_text,
-                    "dates": TARGET_MONTH_LABEL,
+                    "dates": item.get("target_month", TARGET_MONTH_LABEL),
                     "is_priority": item["is_priority"]
                 })
 
         browser.close()
 
+    # 4. Print out matched resorts for logging visibility
+    if filtered_items:
+        logging.info("--- CURRENT MATCHED GDV RESORTS ---")
+        for idx, item in enumerate(filtered_items, 1):
+            item_text = item.get("text", "")
+            lines = [l.strip() for l in item_text.splitlines() if l.strip()]
+            
+            resort_title = lines[0] if lines else "Unknown Resort"
+            location = lines[1] if len(lines) > 1 else "N/A"
+            dates_info = item.get("target_month", "N/A")
+            
+            item_id = item_text[:100]
+            is_new = "NEW" if item_id not in seen_weeks else "ALREADY SEEN"
+            
+            logging.info(f"  {idx}. [{is_new}] {resort_title} ({location}) - Month: {dates_info}")
+        logging.info("-----------------------------------")
+
+    # 5. Send email notification and update seen weeks tracking file
     if new_weeks:
         logging.info(f"Found {len(new_weeks)} new GDV listings matching criteria!")
         send_email_notification(new_weeks)
         save_seen_weeks(seen_weeks)
     else:
         logging.info("No new matching GDV inventory found.")
-        # Print out matched resorts for logging visibility
-    if filtered_items:
-        logging.info("--- CURRENT MATCHED GDV RESORTS ---")
-        for idx, item in enumerate(filtered_items, 1):
-            # Fall back through possible dictionary key names
-            resort = item.get("resort") or item.get("resort_name") or item.get("title") or "Unknown Resort"
-            location = item.get("state") or item.get("location") or item.get("region") or "N/A"
-            dates = item.get("check_in") or item.get("dates") or item.get("date_range") or "N/A"
-            
-            # Check ID against seen weeks
-            item_id = item.get("id") or item.get("link") or ""
-            is_new = "NEW" if item_id not in seen_weeks else "ALREADY SEEN"
-            
-            logging.info(f"  {idx}. [{is_new}] {resort} ({location}) - Dates: {dates}")
-        logging.info("-----------------------------------")
 
 
 if __name__ == "__main__":
