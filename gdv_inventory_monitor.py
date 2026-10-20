@@ -359,43 +359,53 @@ def run_gdv_scrape():
 
         browser.close()
 
-    
     # 4. Print out matched resorts for logging visibility
     if filtered_items:
         logging.info("--- CURRENT MATCHED GDV RESORTS ---")
         for idx, item in enumerate(filtered_items, 1):
             item_text = item.get("text", "")
             lines = [l.strip() for l in item_text.splitlines() if l.strip()]
-            
-            # Junk keywords to filter out of title detection
-            junk_terms = [
-                "VIEW", "MAP", "SHOW", "SORT BY", "DETAILS", "AS LOW AS", 
-                "$", "BEDROOM", "BATH", "WITH", "NARROW", "SEARCH", "PROTECT"
+
+            # Known UI control phrases (exact line matches or specific prefix blocks)
+            ui_junk = [
+                "RESERVE YOUR", "VACATION CONDO", "NARROW YOUR SEARCH", "VACATION TYPE",
+                "BEDROOMS", "PROTECT YOUR VACATION", "MEMBERSHIP GUIDEBOOK", "SORT BY",
+                "MAP", "VIEW", "SHOW", "DETAILS", "BOOK WITH POINTS", "AS LOW AS"
             ]
-            
-            clean_lines = [
+
+            # Filter out pure UI control lines
+            candidate_lines = [
                 l for l in lines 
-                if not any(term in l.upper() for term in junk_terms) and len(l) > 3
+                if not any(junk == l.upper() or l.upper().startswith(junk) for junk in ui_junk)
             ]
-            
-            # Extract location line
+
+            # 1. Locate City, State line
             location = "N/A"
-            for l in lines:
+            loc_idx = -1
+            for i, l in enumerate(candidate_lines):
                 if re.search(r',\s*[A-Z]{2}\b', l) or any(st in l.lower() for st in ["florida", "tennessee", "michigan", "virginia", "north carolina"]):
                     location = l
+                    loc_idx = i
                     break
 
-            # Extract date if present
+            # 2. Title is the line directly before location, or the first candidate line
+            if loc_idx > 0:
+                resort_title = candidate_lines[loc_idx - 1]
+            elif candidate_lines:
+                resort_title = candidate_lines[0]
+            else:
+                resort_title = "Unknown Resort"
+
+            # 3. Extract date if present
             dates_match = re.search(r'\d{1,2}/\d{1,2}/\d{4}', item_text)
             exact_date = dates_match.group(0) if dates_match else item.get("target_month", "N/A")
 
-            resort_title = clean_lines[0] if clean_lines else "Unknown Resort"
-            
             item_id = item_text[:100]
             is_new = "NEW" if item_id not in seen_weeks else "ALREADY SEEN"
-            
+
             logging.info(f"  {idx}. [{is_new}] {resort_title} | Location: {location} | Month: {exact_date}")
         logging.info("-----------------------------------")
+    
 
 
 if __name__ == "__main__":
