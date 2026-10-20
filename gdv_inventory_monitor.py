@@ -363,20 +363,30 @@ def run_gdv_scrape():
             item_text = item.get("text", "")
             lines = [l.strip() for l in item_text.splitlines() if l.strip()]
             
-            # Filter out promotional header tags like "VIEW (AS LOW AS)" or "MAP"
-            clean_lines = [
+            # Filter out UI controls, prices, and button artifacts
+            junk_terms = ["VIEW", "MAP", "SHOW", "SORT BY", "DETAILS", "AS LOW AS", "$", "BEDROOM", "BATH"]
+            meaningful_lines = [
                 l for l in lines 
-                if not any(tag in l.upper() for tag in ["AS LOW AS", "VIEW", "MAP", "SHOW", "SORT BY"])
+                if not any(term in l.upper() for term in junk_terms) and len(l) > 3
             ]
             
-            resort_title = clean_lines[0] if clean_lines else "Unknown Resort"
-            location = clean_lines[1] if len(clean_lines) > 1 else "N/A"
-            dates_info = item.get("target_month", "N/A")
+            # Find location line containing state or city patterns
+            location = "N/A"
+            for l in lines:
+                if re.search(r',\s*[A-Z]{2}\b', l) or any(st in l.lower() for st in ["florida", "tennessee", "michigan", "virginia", "north carolina"]):
+                    location = l
+                    break
+
+            # Find date range if present in card text
+            dates_match = re.search(r'\d{1,2}/\d{1,2}/\d{4}', item_text)
+            exact_date = dates_match.group(0) if dates_match else item.get("target_month", "N/A")
+
+            resort_title = meaningful_lines[0] if meaningful_lines else "Unknown Resort"
             
             item_id = item_text[:100]
             is_new = "NEW" if item_id not in seen_weeks else "ALREADY SEEN"
             
-            logging.info(f"  {idx}. [{is_new}] {resort_title} ({location}) - Month: {dates_info}")
+            logging.info(f"  {idx}. [{is_new}] {resort_title} | Location: {location} | Date/Month: {exact_date}")
         logging.info("-----------------------------------")
 
 
