@@ -355,6 +355,7 @@ def run_gdv_scrape():
 
         browser.close()
 
+    
     # 4. Print out matched resorts for logging visibility
     if filtered_items:
         logging.info("--- CURRENT MATCHED GDV RESORTS ---")
@@ -362,8 +363,14 @@ def run_gdv_scrape():
             item_text = item.get("text", "")
             lines = [l.strip() for l in item_text.splitlines() if l.strip()]
             
-            resort_title = lines[0] if lines else "Unknown Resort"
-            location = lines[1] if len(lines) > 1 else "N/A"
+            # Filter out promotional header tags like "VIEW (AS LOW AS)" or "MAP"
+            clean_lines = [
+                l for l in lines 
+                if not any(tag in l.upper() for tag in ["AS LOW AS", "VIEW", "MAP", "SHOW", "SORT BY"])
+            ]
+            
+            resort_title = clean_lines[0] if clean_lines else "Unknown Resort"
+            location = clean_lines[1] if len(clean_lines) > 1 else "N/A"
             dates_info = item.get("target_month", "N/A")
             
             item_id = item_text[:100]
@@ -371,14 +378,6 @@ def run_gdv_scrape():
             
             logging.info(f"  {idx}. [{is_new}] {resort_title} ({location}) - Month: {dates_info}")
         logging.info("-----------------------------------")
-
-    # 5. Send email notification and update seen weeks tracking file
-    if new_weeks:
-        logging.info(f"Found {len(new_weeks)} new GDV listings matching criteria!")
-        send_email_notification(new_weeks)
-        save_seen_weeks(seen_weeks)
-    else:
-        logging.info("No new matching GDV inventory found.")
 
 
 if __name__ == "__main__":
