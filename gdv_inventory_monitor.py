@@ -7,6 +7,10 @@ from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from playwright.sync_api import sync_playwright
+from dotenv import load_dotenv
+
+# Load environment variables from local .env file if present
+load_dotenv()
 
 # Logging Configuration
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -363,30 +367,34 @@ def run_gdv_scrape():
             item_text = item.get("text", "")
             lines = [l.strip() for l in item_text.splitlines() if l.strip()]
             
-            # Filter out UI controls, prices, and button artifacts
-            junk_terms = ["VIEW", "MAP", "SHOW", "SORT BY", "DETAILS", "AS LOW AS", "$", "BEDROOM", "BATH"]
-            meaningful_lines = [
+            # Junk keywords to filter out of title detection
+            junk_terms = [
+                "VIEW", "MAP", "SHOW", "SORT BY", "DETAILS", "AS LOW AS", 
+                "$", "BEDROOM", "BATH", "WITH", "NARROW", "SEARCH", "PROTECT"
+            ]
+            
+            clean_lines = [
                 l for l in lines 
                 if not any(term in l.upper() for term in junk_terms) and len(l) > 3
             ]
             
-            # Find location line containing state or city patterns
+            # Extract location line
             location = "N/A"
             for l in lines:
                 if re.search(r',\s*[A-Z]{2}\b', l) or any(st in l.lower() for st in ["florida", "tennessee", "michigan", "virginia", "north carolina"]):
                     location = l
                     break
 
-            # Find date range if present in card text
+            # Extract date if present
             dates_match = re.search(r'\d{1,2}/\d{1,2}/\d{4}', item_text)
             exact_date = dates_match.group(0) if dates_match else item.get("target_month", "N/A")
 
-            resort_title = meaningful_lines[0] if meaningful_lines else "Unknown Resort"
+            resort_title = clean_lines[0] if clean_lines else "Unknown Resort"
             
             item_id = item_text[:100]
             is_new = "NEW" if item_id not in seen_weeks else "ALREADY SEEN"
             
-            logging.info(f"  {idx}. [{is_new}] {resort_title} | Location: {location} | Date/Month: {exact_date}")
+            logging.info(f"  {idx}. [{is_new}] {resort_title} | Location: {location} | Month: {exact_date}")
         logging.info("-----------------------------------")
 
 
