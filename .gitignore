@@ -3,3 +3,4 @@ seen_timeshares.json
 *.png
 seen_properties.txt
 matched_properties.csv
+.env
