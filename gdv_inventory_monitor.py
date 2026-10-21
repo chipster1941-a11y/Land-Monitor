@@ -7,10 +7,13 @@ from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from playwright.sync_api import sync_playwright
-from dotenv import load_dotenv
 
-# Load environment variables from local .env file if present
-load_dotenv()
+# Safely load local .env if python-dotenv is available (for local testing)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 # Logging Configuration
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
