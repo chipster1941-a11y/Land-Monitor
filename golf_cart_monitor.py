@@ -64,29 +64,25 @@ def scrape_craigslist(page, location_name, search_url):
     matched_items = []
     try:
         page.goto(search_url, wait_until="networkidle", timeout=30000)
-        
-        # Multiple fallback selectors for Craigslist layout iterations
-        cards = page.query_selector_all(".result-node, .cl-static-search-result, li.cl-search-result, .gallery-card")
+        cards = page.query_selector_all(".result-node, .cl-static-search-result, li.cl-search-result, .gallery-card, a.cl-app-anchor")
         logging.info(f"Found {len(cards)} raw {location_name} Craigslist result items.")
         
         for card in cards:
             text = card.inner_text().strip()
+            if not text:
+                continue
             
-            # Extract price if present
-            price_elem = card.query_selector(".price, .priceinfo")
-            price_text = price_elem.inner_text().strip() if price_elem else ""
-            
-            # Extract title and URL anchor
-            link_elem = card.query_selector("a.title, a.cl-app-anchor, a")
+            link_elem = card.query_selector("a")
             url = link_elem.get_attribute("href") if link_elem else search_url
             
-            lines = [l.strip() for l in text.splitlines() if l.strip()]
-            title = lines[0] if lines else text
-            
-            if is_relevant_listing(title):
-                full_title = f"{title} ({price_text})" if price_text else title
+            # Use full card text to check relevance
+            if is_relevant_listing(text):
+                # Use the first non-empty line as the clean title
+                lines = [l.strip() for l in text.splitlines() if l.strip()]
+                title = lines[0] if lines else "Golf Cart Listing"
+                
                 matched_items.append({
-                    "title": full_title,
+                    "title": title,
                     "url": url,
                     "source": f"Craigslist ({location_name})"
                 })
@@ -101,12 +97,6 @@ def scrape_facebook(page, location_name, search_url):
     try:
         page.goto(search_url, wait_until="networkidle", timeout=30000)
         
-        # Save visual debug snapshot
-        debug_filename = f"fb_debug_{location_name.lower()}.png"
-        page.screenshot(path=debug_filename)
-        logging.info(f"Saved {debug_filename} for Facebook debugging.")
-        
-        # Primary container card selectors for Marketplace feed
         cards = page.query_selector_all("div[role='main'] div[style*='max-width'], div[role='feed'] > div, div.x9f619")
         logging.info(f"Found {len(cards)} Facebook Marketplace cards for {location_name}.")
         
@@ -114,18 +104,19 @@ def scrape_facebook(page, location_name, search_url):
             text = card.inner_text().strip()
             if not text:
                 continue
-                
-            # Extract link element if available within card
-            link_elem = card.query_selector("a[href*='/marketplace/item/']")
-            href = link_elem.get_attribute("href") if link_elem else None
-            full_url = f"https://www.facebook.com{href}" if href and href.startswith("/") else search_url
             
-            lines = [l for l in text.splitlines() if l.strip()]
-            title_candidate = lines[0] if lines else text
-            
+            # Check full card inner text for brand/cart keywords
             if is_relevant_listing(text):
+                link_elem = card.query_selector("a[href*='/marketplace/item/']")
+                href = link_elem.get_attribute("href") if link_elem else None
+                full_url = f"https://www.facebook.com{href}" if href and href.startswith("/") else search_url
+                
+                # Filter out pure price/location lines to pick the best title line
+                lines = [l.strip() for l in text.splitlines() if l.strip() and not l.strip().startswith("$")]
+                title = lines[0] if lines else text.splitlines()[0]
+                
                 matched_items.append({
-                    "title": title_candidate,
+                    "title": title,
                     "url": full_url,
                     "source": f"Facebook ({location_name})"
                 })
