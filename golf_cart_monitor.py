@@ -153,10 +153,15 @@ def scrape_nextdoor(page, search_url):
     logging.info("Checking Nextdoor For Sale & Free...")
     matched_items = []
     try:
-        page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+        page.goto(search_url, wait_until="networkidle", timeout=30000)
         page.wait_for_timeout(3000)
         
-        elements = page.query_selector_all("a[href*='/for_sale_and_free/'], div[data-testid='fsf-item-card']")
+        # Scroll down slightly to trigger lazy loading
+        page.evaluate("window.scrollBy(0, 1000)")
+        page.wait_for_timeout(2000)
+        
+        # Expanded selectors for Nextdoor card elements and direct item links
+        elements = page.query_selector_all("a[href*='/for_sale_and_free/'], [data-testid*='item'], div[class*='ItemCard']")
         logging.info(f"Found {len(elements)} raw Nextdoor elements.")
         
         for elem in elements:
@@ -165,8 +170,8 @@ def scrape_nextdoor(page, search_url):
             full_url = f"https://nextdoor.com{href}" if href and href.startswith("/") else search_url
             
             if text and is_relevant_listing(text):
-                lines = [l for l in text.splitlines() if l.strip()]
-                title_candidate = lines[0] if lines else text
+                lines = [l.strip() for l in text.splitlines() if l.strip()]
+                title_candidate = lines[0] if lines else "Nextdoor Golf Cart Listing"
                 matched_items.append({
                     "title": title_candidate,
                     "url": full_url,
