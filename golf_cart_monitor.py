@@ -152,6 +152,9 @@ def scrape_nextdoor(page, search_url):
     matched_items = []
     try:
         page.goto(search_url, wait_until="domcontentloaded", timeout=35000)
+        page.screenshot(path="nextdoor_debug.png")
+        logging.info(f"Nextdoor Current URL: {page.url}")
+        logging.info(f"Nextdoor Page Title: {page.title()}")
         page.wait_for_timeout(4000)
         
         # Scroll to trigger lazy loading of feed cards
