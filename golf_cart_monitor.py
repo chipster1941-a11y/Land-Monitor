@@ -95,23 +95,27 @@ def scrape_facebook(page, location_name, search_url):
     logging.info(f"Checking {location_name} Facebook Marketplace...")
     matched_items = []
     try:
-        page.goto(search_url, wait_until="networkidle", timeout=30000)
+        page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+        page.wait_for_timeout(3000)  # Allow initial hydration
         
-        cards = page.query_selector_all("div[role='main'] div[style*='max-width'], div[role='feed'] > div, div.x9f619")
-        logging.info(f"Found {len(cards)} Facebook Marketplace cards for {location_name}.")
+        # Scroll down slightly to hydrate lazy-loaded cards
+        page.evaluate("window.scrollBy(0, 1000)")
+        page.wait_for_timeout(2000)
+        
+        # Query specific Marketplace item link nodes
+        cards = page.query_selector_all("a[href*='/marketplace/item/']")
+        logging.info(f"Found {len(cards)} Facebook Marketplace item links for {location_name}.")
         
         for card in cards:
             text = card.inner_text().strip()
             if not text:
                 continue
-            
-            # Check full card inner text for brand/cart keywords
-            if is_relevant_listing(text):
-                link_elem = card.query_selector("a[href*='/marketplace/item/']")
-                href = link_elem.get_attribute("href") if link_elem else None
-                full_url = f"https://www.facebook.com{href}" if href and href.startswith("/") else search_url
                 
-                # Filter out pure price/location lines to pick the best title line
+            href = card.get_attribute("href")
+            full_url = f"https://www.facebook.com{href}" if href and href.startswith("/") else search_url
+            
+            if is_relevant_listing(text):
+                # Grab non-price/location lines for clean title
                 lines = [l.strip() for l in text.splitlines() if l.strip() and not l.strip().startswith("$")]
                 title = lines[0] if lines else text.splitlines()[0]
                 
