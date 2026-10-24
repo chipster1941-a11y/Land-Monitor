@@ -8,29 +8,31 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from playwright.sync_api import sync_playwright
 
-# Safely load local .env if python-dotenv is available (for local testing)
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
     pass
 
-# Logging Configuration
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-# File Paths & Configuration
 SEEN_FILE = "seen_golf_carts.json"
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "")
 SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD", "")
 RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL", "")
 
-# Broad Matching Keywords: Yamaha, E-Z-GO, Club Car, and general gas/golf cart terms
+# Facebook Cookies
+FB_C_USER = os.environ.get("FB_C_USER", "")
+FB_XS = os.environ.get("FB_XS", "")
+
+# Nextdoor Cookies
+ND_SESSION = os.environ.get("ND_SESSION", "")
+
 TARGET_KEYWORDS = [
     "yamaha", "ezgo", "e-z-go", "club car", "drive2", "quietech", 
     "txt", "rxv", "precedent", "onward", "golf cart", "gas cart", "golf car"
 ]
 
-# Exclusion Terms to filter out parts/accessories listings
 PARTS_EXCLUSIONS = ["wheel", "tire", "charger", "cover", "enclosure", "windshield", "battery", "lift kit"]
 
 
@@ -52,11 +54,37 @@ def save_seen_items(seen_list):
         logging.error(f"Failed to save {SEEN_FILE}: {e}")
 
 
-def is_relevant_listing(title):
-    title_lower = title.lower()
-    has_target = any(kw in title_lower for kw in TARGET_KEYWORDS)
-    is_part = any(p in title_lower for p in PARTS_EXCLUSIONS)
+def is_relevant_listing(text):
+    text_lower = text.lower()
+    has_target = any(kw in text_lower for kw in TARGET_KEYWORDS)
+    is_part = any(p in text_lower for p in PARTS_EXCLUSIONS)
     return has_target and not is_part
+
+
+def inject_cookies(context):
+    cookies = []
+    
+    # Inject Facebook session
+    if FB_C_USER and FB_XS:
+        cookies.extend([
+            {"name": "c_user", "value": FB_C_USER, "domain": ".facebook.com", "path": "/"},
+            {"name": "xs", "value": FB_XS, "domain": ".facebook.com", "path": "/"}
+        ])
+        logging.info("Injected Facebook session cookies.")
+    else:
+        logging.warning("FB_C_USER or FB_XS environment variables missing.")
+
+    # Inject Nextdoor session
+    if ND_SESSION:
+        cookies.extend([
+            {"name": "ndp_session_id", "value": ND_SESSION, "domain": ".nextdoor.com", "path": "/"}
+        ])
+        logging.info("Injected Nextdoor session cookies.")
+    else:
+        logging.warning("ND_SESSION environment variable missing.")
+
+    if cookies:
+        context.add_cookies(cookies)
 
 
 def scrape_craigslist(page, location_name, search_url):
@@ -75,12 +103,9 @@ def scrape_craigslist(page, location_name, search_url):
             link_elem = card.query_selector("a")
             url = link_elem.get_attribute("href") if link_elem else search_url
             
-            # Use full card text to check relevance
             if is_relevant_listing(text):
-                # Use the first non-empty line as the clean title
                 lines = [l.strip() for l in text.splitlines() if l.strip()]
                 title = lines[0] if lines else "Golf Cart Listing"
-                
                 matched_items.append({
                     "title": title,
                     "url": url,
@@ -96,13 +121,10 @@ def scrape_facebook(page, location_name, search_url):
     matched_items = []
     try:
         page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
-        page.wait_for_timeout(3000)  # Allow initial hydration
-        
-        # Scroll down slightly to hydrate lazy-loaded cards
+        page.wait_for_timeout(3000)
         page.evaluate("window.scrollBy(0, 1000)")
         page.wait_for_timeout(2000)
         
-        # Query specific Marketplace item link nodes
         cards = page.query_selector_all("a[href*='/marketplace/item/']")
         logging.info(f"Found {len(cards)} Facebook Marketplace item links for {location_name}.")
         
@@ -115,10 +137,8 @@ def scrape_facebook(page, location_name, search_url):
             full_url = f"https://www.facebook.com{href}" if href and href.startswith("/") else search_url
             
             if is_relevant_listing(text):
-                # Grab non-price/location lines for clean title
                 lines = [l.strip() for l in text.splitlines() if l.strip() and not l.strip().startswith("$")]
                 title = lines[0] if lines else text.splitlines()[0]
-                
                 matched_items.append({
                     "title": title,
                     "url": full_url,
@@ -133,9 +153,8 @@ def scrape_nextdoor(page, search_url):
     logging.info("Checking Nextdoor For Sale & Free...")
     matched_items = []
     try:
-        page.goto(search_url, wait_until="networkidle", timeout=30000)
-        page.screenshot(path="nextdoor_debug.png")
-        logging.info("Saved nextdoor_debug.png for Nextdoor debugging.")
+        page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+        page.wait_for_timeout(3000)
         
         elements = page.query_selector_all("a[href*='/for_sale_and_free/'], div[data-testid='fsf-item-card']")
         logging.info(f"Found {len(elements)} raw Nextdoor elements.")
@@ -164,7 +183,6 @@ def send_email_alert(new_items):
         return
 
     subject = f"Golf Cart Alert: {len(new_items)} New Listing(s) Found!"
-    
     body = "New Golf Cart Listings Found:\n\n"
     for item in new_items:
         body += f"• {item['title']}\n  Source: {item['source']}\n  Link: {item['url']}\n\n"
@@ -196,6 +214,7 @@ def main():
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
+        inject_cookies(context)
         page = context.new_page()
 
         # 1. Scrape Craigslist
@@ -219,7 +238,6 @@ def main():
 
         browser.close()
 
-    # Filter out previously alerted listings
     new_alerts = []
     for item in notification_queue:
         item_id = item["title"] + item["url"]

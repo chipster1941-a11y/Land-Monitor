@@ -63,13 +63,12 @@ jobs:
 
       - name: Run Golf Cart Monitor
         env:
-          EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
-          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-          EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
           SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
           SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
           RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
-          NEXTDOOR_SESSION_ID: ${{ secrets.NEXTDOOR_SESSION_ID }}
+          FB_C_USER: ${{ secrets.FB_C_USER }}
+          FB_XS: ${{ secrets.FB_XS }}
+          ND_SESSION: ${{ secrets.ND_SESSION }}
         run: python golf_cart_monitor.py
 
       - name: Save updated Golf Cart seen tracking
