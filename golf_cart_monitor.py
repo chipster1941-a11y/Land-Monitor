@@ -71,17 +71,15 @@ def inject_cookies(context):
             {"name": "xs", "value": FB_XS, "domain": ".facebook.com", "path": "/"}
         ])
         logging.info("Injected Facebook session cookies.")
-    else:
-        logging.warning("FB_C_USER or FB_XS environment variables missing.")
 
-    # Inject Nextdoor session
+    # Inject Nextdoor session under both cookie key variants and domains
     if ND_SESSION:
         cookies.extend([
-            {"name": "ndp_session_id", "value": ND_SESSION, "domain": ".nextdoor.com", "path": "/"}
+            {"name": "ndp_session_id", "value": ND_SESSION, "domain": ".nextdoor.com", "path": "/"},
+            {"name": "nd_session", "value": ND_SESSION, "domain": ".nextdoor.com", "path": "/"},
+            {"name": "ndp_session_id", "value": ND_SESSION, "domain": "nextdoor.com", "path": "/"}
         ])
         logging.info("Injected Nextdoor session cookies.")
-    else:
-        logging.warning("ND_SESSION environment variable missing.")
 
     if cookies:
         context.add_cookies(cookies)
@@ -153,27 +151,30 @@ def scrape_nextdoor(page, search_url):
     logging.info("Checking Nextdoor For Sale & Free...")
     matched_items = []
     try:
-        page.goto(search_url, wait_until="networkidle", timeout=30000)
+        page.goto(search_url, wait_until="domcontentloaded", timeout=35000)
+        page.wait_for_timeout(4000)
+        
+        # Scroll to trigger lazy loading of feed cards
+        page.evaluate("window.scrollBy(0, 1200)")
         page.wait_for_timeout(3000)
         
-        # Scroll down slightly to trigger lazy loading
-        page.evaluate("window.scrollBy(0, 1000)")
-        page.wait_for_timeout(2000)
+        # Capture direct product links, feed containers, and card wrappers
+        cards = page.query_selector_all("a[href*='/for_sale_and_free/'], div[id*='feed_item'], div[class*='PostBlock'], div[data-testid*='feed']")
+        logging.info(f"Found {len(cards)} raw Nextdoor card elements.")
         
-        # Expanded selectors for Nextdoor card elements and direct item links
-        elements = page.query_selector_all("a[href*='/for_sale_and_free/'], [data-testid*='item'], div[class*='ItemCard']")
-        logging.info(f"Found {len(elements)} raw Nextdoor elements.")
-        
-        for elem in elements:
-            text = elem.inner_text().strip()
-            href = elem.get_attribute("href")
+        for card in cards:
+            text = card.inner_text().strip()
+            if not text:
+                continue
+                
+            href = card.get_attribute("href")
             full_url = f"https://nextdoor.com{href}" if href and href.startswith("/") else search_url
             
-            if text and is_relevant_listing(text):
-                lines = [l.strip() for l in text.splitlines() if l.strip()]
-                title_candidate = lines[0] if lines else "Nextdoor Golf Cart Listing"
+            if is_relevant_listing(text):
+                lines = [l.strip() for l in text.splitlines() if l.strip() and not l.strip().startswith("$")]
+                title = lines[0] if lines else "Nextdoor Golf Cart Listing"
                 matched_items.append({
-                    "title": title_candidate,
+                    "title": title,
                     "url": full_url,
                     "source": "Nextdoor"
                 })
