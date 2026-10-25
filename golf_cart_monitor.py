@@ -18,6 +18,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 
 SEEN_FILE = "seen_golf_carts.json"
 NEXTDOOR_STATE_FILE = "nextdoor_state.json"
+EXPIRED_MARKER = "__NEXTDOOR_EXPIRED_NOTIFIED__"
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "")
 SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD", "")
 RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL", "")
@@ -139,6 +140,7 @@ def scrape_facebook(page, location_name, search_url):
 def scrape_nextdoor(page, search_url):
     logging.info("Checking Nextdoor For Sale & Free...")
     matched_items = []
+    status = "error"
     try:
         page.goto(search_url, wait_until="domcontentloaded", timeout=35000)
         page.screenshot(path="nextdoor_debug.png")
@@ -146,7 +148,7 @@ def scrape_nextdoor(page, search_url):
         logging.info(f"Nextdoor Page Title: {page.title()}")
         if "login" in page.url:
             logging.error("Nextdoor session expired. Re-run login_nextdoor.py.")
-            return matched_items
+            return matched_items, "expired"
         page.wait_for_timeout(4000)
         
         # Scroll to trigger lazy loading of feed cards
@@ -173,20 +175,16 @@ def scrape_nextdoor(page, search_url):
                     "url": full_url,
                     "source": "Nextdoor"
                 })
+        status = "ok"
     except Exception as e:
         logging.error(f"Error scraping Nextdoor: {e}")
-    return matched_items
+    return matched_items, status
 
 
-def send_email_alert(new_items):
+def send_email(subject, body):
     if not SENDER_EMAIL or not SENDER_PASSWORD or not RECIPIENT_EMAIL:
         logging.warning("Email credentials missing in environment. Skipping email dispatch.")
-        return
-
-    subject = f"Golf Cart Alert: {len(new_items)} New Listing(s) Found!"
-    body = "New Golf Cart Listings Found:\n\n"
-    for item in new_items:
-        body += f"- {item['title']}\n  Source: {item['source']}\n  Link: {item['url']}\n\n"
+        return False
 
     msg = MIMEMultipart()
     msg["From"] = SENDER_EMAIL
@@ -200,9 +198,35 @@ def send_email_alert(new_items):
         server.login(SENDER_EMAIL, SENDER_PASSWORD)
         server.sendmail(SENDER_EMAIL, RECIPIENT_EMAIL, msg.as_string())
         server.quit()
-        logging.info(f"Email alert successfully sent to {RECIPIENT_EMAIL}.")
+        logging.info(f"Email successfully sent to {RECIPIENT_EMAIL}.")
+        return True
     except Exception as e:
-        logging.error(f"Failed to send email alert: {e}")
+        logging.error(f"Failed to send email: {e}")
+        return False
+
+
+def send_email_alert(new_items):
+    subject = f"Golf Cart Alert: {len(new_items)} New Listing(s) Found!"
+    body = "New Golf Cart Listings Found:\n\n"
+    for item in new_items:
+        body += f"- {item['title']}\n  Source: {item['source']}\n  Link: {item['url']}\n\n"
+    return send_email(subject, body)
+
+
+def send_nextdoor_expired_email():
+    subject = "Golf Cart Monitor: Nextdoor login expired"
+    body = (
+        "The saved Nextdoor login has expired, so Nextdoor listings are not being checked.\n"
+        "Facebook and Craigslist are still working.\n\n"
+        "To fix it:\n"
+        "1. On your PC, in C:\\Projects\\Land, run: python login_nextdoor.py\n"
+        "   Log in to Nextdoor in the window that opens, wait until you see your feed, then press Enter.\n"
+        "2. Run the PowerShell block that compresses nextdoor_state.json and copies it to the clipboard.\n"
+        "3. On GitHub: Settings > Secrets and variables > Actions > ND_STATE_GZ_B64 > pencil icon,\n"
+        "   paste, and save.\n\n"
+        "You will not get this email again until the login has worked and then expired again."
+    )
+    return send_email(subject, body)
 
 
 def main():
@@ -239,7 +263,7 @@ def main():
         notification_queue.extend(fb_matches)
 
         # 3. Scrape Nextdoor
-        nd_matches = scrape_nextdoor(page, "https://nextdoor.com/for_sale_and_free/?query=golf%20cart")
+        nd_matches, nd_status = scrape_nextdoor(page, "https://nextdoor.com/for_sale_and_free/?query=golf%20cart")
         logging.info(f"Nextdoor section added {len(nd_matches)} items to notification queue.")
         notification_queue.extend(nd_matches)
 
@@ -252,13 +276,26 @@ def main():
             new_alerts.append(item)
             seen_items.append(item_id)
 
+    # Tell the user once when the Nextdoor login expires; reset when it works again.
+    state_changed = False
+    if nd_status == "expired" and EXPIRED_MARKER not in seen_items:
+        if send_nextdoor_expired_email():
+            seen_items.append(EXPIRED_MARKER)
+            state_changed = True
+    elif nd_status == "ok" and EXPIRED_MARKER in seen_items:
+        seen_items.remove(EXPIRED_MARKER)
+        state_changed = True
+        logging.info("Nextdoor session is working again.")
+
     logging.info(f"Scan complete. Total new items queued for email dispatch: {len(new_alerts)}")
 
     if new_alerts:
         send_email_alert(new_alerts)
-        save_seen_items(seen_items)
     else:
         logging.info("No new listings found on this run.")
+
+    if new_alerts or state_changed:
+        save_seen_items(seen_items)
 
 
 if __name__ == "__main__":
