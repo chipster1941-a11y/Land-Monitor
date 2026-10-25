@@ -4,3 +4,6 @@ seen_timeshares.json
 seen_properties.txt
 matched_properties.csv
 .env
+nextdoor_state.json
+nextdoor_debug.png
+.env
