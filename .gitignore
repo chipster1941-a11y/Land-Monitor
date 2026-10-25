@@ -7,3 +7,4 @@ matched_properties.csv
 nextdoor_state.json
 nextdoor_debug.png
 .env
+seen_old.json
