@@ -61,6 +61,18 @@ jobs:
           pip install playwright beautifulsoup4 requests curl_cffi
           playwright install chromium
 
+      - name: Restore Nextdoor session
+        shell: bash
+        env:
+          ND_STATE_GZ_B64: ${{ secrets.ND_STATE_GZ_B64 }}
+        run: |
+          if [ -n "$ND_STATE_GZ_B64" ]; then
+            echo "$ND_STATE_GZ_B64" | base64 -d | gunzip > nextdoor_state.json
+            echo "Nextdoor session restored."
+          else
+            echo "No ND_STATE_GZ_B64 secret found; Nextdoor will be skipped."
+          fi
+
       - name: Run Golf Cart Monitor
         env:
           SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
@@ -68,7 +80,6 @@ jobs:
           RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
           FB_C_USER: ${{ secrets.FB_C_USER }}
           FB_XS: ${{ secrets.FB_XS }}
-          ND_SESSION: ${{ secrets.ND_SESSION }}
         run: python golf_cart_monitor.py
 
       - name: Save updated Golf Cart seen tracking

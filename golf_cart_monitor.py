@@ -17,6 +17,7 @@ except ImportError:
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 SEEN_FILE = "seen_golf_carts.json"
+NEXTDOOR_STATE_FILE = "nextdoor_state.json"
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "")
 SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD", "")
 RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL", "")
@@ -24,9 +25,6 @@ RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL", "")
 # Facebook Cookies
 FB_C_USER = os.environ.get("FB_C_USER", "")
 FB_XS = os.environ.get("FB_XS", "")
-
-# Nextdoor Cookies
-ND_SESSION = os.environ.get("ND_SESSION", "")
 
 TARGET_KEYWORDS = [
     "yamaha", "ezgo", "e-z-go", "club car", "drive2", "quietech", 
@@ -71,15 +69,6 @@ def inject_cookies(context):
             {"name": "xs", "value": FB_XS, "domain": ".facebook.com", "path": "/"}
         ])
         logging.info("Injected Facebook session cookies.")
-
-    # Inject Nextdoor session under both cookie key variants and domains
-    if ND_SESSION:
-        cookies.extend([
-            {"name": "ndp_session_id", "value": ND_SESSION, "domain": ".nextdoor.com", "path": "/"},
-            {"name": "nd_session", "value": ND_SESSION, "domain": ".nextdoor.com", "path": "/"},
-            {"name": "ndp_session_id", "value": ND_SESSION, "domain": "nextdoor.com", "path": "/"}
-        ])
-        logging.info("Injected Nextdoor session cookies.")
 
     if cookies:
         context.add_cookies(cookies)
@@ -155,6 +144,9 @@ def scrape_nextdoor(page, search_url):
         page.screenshot(path="nextdoor_debug.png")
         logging.info(f"Nextdoor Current URL: {page.url}")
         logging.info(f"Nextdoor Page Title: {page.title()}")
+        if "login" in page.url:
+            logging.error("Nextdoor session expired. Re-run login_nextdoor.py.")
+            return matched_items
         page.wait_for_timeout(4000)
         
         # Scroll to trigger lazy loading of feed cards
@@ -194,7 +186,7 @@ def send_email_alert(new_items):
     subject = f"Golf Cart Alert: {len(new_items)} New Listing(s) Found!"
     body = "New Golf Cart Listings Found:\n\n"
     for item in new_items:
-        body += f"• {item['title']}\n  Source: {item['source']}\n  Link: {item['url']}\n\n"
+        body += f"- {item['title']}\n  Source: {item['source']}\n  Link: {item['url']}\n\n"
 
     msg = MIMEMultipart()
     msg["From"] = SENDER_EMAIL
@@ -220,8 +212,14 @@ def main():
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
+        state = NEXTDOOR_STATE_FILE if os.path.exists(NEXTDOOR_STATE_FILE) else None
+        if state:
+            logging.info("Loaded saved Nextdoor login session.")
+        else:
+            logging.warning("No nextdoor_state.json found; Nextdoor will be skipped or logged out.")
         context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            storage_state=state,
         )
         inject_cookies(context)
         page = context.new_page()
