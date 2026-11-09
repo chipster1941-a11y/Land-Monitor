@@ -95,5 +95,7 @@ jobs:
         if: always() # Uploads even if the script encounters an error
         uses: actions/upload-artifact@v4
         with:
-          name: nextdoor-debug-screenshot
-          path: nextdoor_debug.png
+          name: debug-screenshots
+          path: |
+            nextdoor_debug.png
+            facebook_debug_*.png
