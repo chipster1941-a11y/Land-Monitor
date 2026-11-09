@@ -113,6 +113,13 @@ def scrape_facebook(page, location_name, search_url):
         page.evaluate("window.scrollBy(0, 1000)")
         page.wait_for_timeout(2000)
         
+        page.screenshot(path=f"facebook_debug_{location_name.lower()}.png")
+        logging.info(f"Facebook {location_name} URL: {page.url}")
+        logging.info(f"Facebook {location_name} Page Title: {page.title()}")
+        if "login" in page.url or "checkpoint" in page.url:
+            logging.error("Facebook session expired or blocked. See the facebook_debug screenshot.")
+            return matched_items
+
         cards = page.query_selector_all("a[href*='/marketplace/item/']")
         logging.info(f"Found {len(cards)} Facebook Marketplace item links for {location_name}.")
         
