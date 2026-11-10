@@ -60,6 +60,17 @@ def is_relevant_listing(text):
     return has_target and not is_part
 
 
+def state_has_facebook_cookies(path):
+    if not path:
+        return False
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return any("facebook.com" in c.get("domain", "") for c in data.get("cookies", []))
+    except Exception:
+        return False
+
+
 def inject_cookies(context):
     cookies = []
     
@@ -252,7 +263,10 @@ def main():
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             storage_state=state,
         )
-        inject_cookies(context)
+        if state_has_facebook_cookies(state):
+            logging.info("Using Facebook cookies from the saved session file.")
+        else:
+            inject_cookies(context)
         page = context.new_page()
 
         # 1. Scrape Craigslist
