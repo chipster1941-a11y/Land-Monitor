@@ -19,6 +19,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 SEEN_FILE = "seen_golf_carts.json"
 NEXTDOOR_STATE_FILE = "nextdoor_state.json"
 EXPIRED_MARKER = "__NEXTDOOR_EXPIRED_NOTIFIED__"
+# Facebook checks are OFF unless the environment variable ENABLE_FACEBOOK=1 is set.
+ENABLE_FACEBOOK = os.environ.get("ENABLE_FACEBOOK", "0") == "1"
 SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "")
 SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD", "")
 RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL", "")
@@ -277,11 +279,14 @@ def main():
         notification_queue.extend(cl_matches)
 
         # 2. Scrape Facebook Marketplace
-        fb_tampa = scrape_facebook(page, "Tampa", "https://www.facebook.com/marketplace/tampa/search?query=golf%20cart")
-        fb_sarasota = scrape_facebook(page, "Sarasota", "https://www.facebook.com/marketplace/sarasota/search?query=golf%20cart")
-        fb_matches = fb_tampa + fb_sarasota
-        logging.info(f"Facebook section added {len(fb_matches)} total matching items.")
-        notification_queue.extend(fb_matches)
+        if ENABLE_FACEBOOK:
+            fb_tampa = scrape_facebook(page, "Tampa", "https://www.facebook.com/marketplace/tampa/search?query=golf%20cart")
+            fb_sarasota = scrape_facebook(page, "Sarasota", "https://www.facebook.com/marketplace/sarasota/search?query=golf%20cart")
+            fb_matches = fb_tampa + fb_sarasota
+            logging.info(f"Facebook section added {len(fb_matches)} total matching items.")
+            notification_queue.extend(fb_matches)
+        else:
+            logging.info("Facebook checks are turned off (set ENABLE_FACEBOOK=1 to turn them on).")
 
         # 3. Scrape Nextdoor
         nd_matches, nd_status = scrape_nextdoor(page, "https://nextdoor.com/for_sale_and_free/?query=golf%20cart")
