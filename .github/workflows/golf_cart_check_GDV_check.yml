@@ -90,12 +90,3 @@ jobs:
           git pull --rebase origin main || true
           git add seen_golf_carts.json || true
           git diff --quiet && git diff --staged --quiet || (git commit -m "auto: update golf cart seen tracking [skip ci]" && git push)
-
-      - name: Upload Debug Artifacts
-        if: always() # Uploads even if the script encounters an error
-        uses: actions/upload-artifact@v4
-        with:
-          name: debug-screenshots
-          path: |
-            nextdoor_debug.png
-            facebook_debug_*.png
