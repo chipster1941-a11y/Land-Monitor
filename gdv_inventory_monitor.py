@@ -3,6 +3,7 @@ import json
 import logging
 import smtplib
 import re
+import hashlib
 from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -53,6 +54,8 @@ LATE_2027_STATES_PATTERNS = [
     r"\bnorth carolina\b", r"\bnc\b"
 ]
 
+_PAGINATION_DEBUG_DONE = False
+
 
 def load_seen_weeks():
     if os.path.exists(SEEN_WEEKS_FILE):
@@ -77,6 +80,12 @@ def save_seen_weeks(seen_weeks):
         logging.error(f"Error saving seen weeks: {e}")
 
 
+def make_item_id(item):
+    """Stable ID built from the month plus the card's full text (not just the first 100 characters)."""
+    key = item.get("target_month", "") + "|" + " ".join(item["text"].split())
+    return hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
+
+
 def is_priority_location(text):
     lower_text = text.lower()
     return any(loc in lower_text for loc in PRIORITY_LOCATIONS)
@@ -93,14 +102,15 @@ def matches_patterns(text, patterns):
 
 
 def send_email_notification(new_weeks):
+    """Returns True only if the email was actually sent."""
     if not EMAIL_SENDER or not EMAIL_PASSWORD or not EMAIL_RECEIVER:
         logging.warning("Email credentials not fully set. Skipping email alert.")
-        return
+        return False
 
     msg = MIMEMultipart()
     msg["From"] = EMAIL_SENDER
     msg["To"] = EMAIL_RECEIVER
-    msg["Subject"] = f"🚨 GDV Inventory Alert: {len(new_weeks)} New Resort Listing(s) Found!"
+    msg["Subject"] = f"GDV Inventory Alert: {len(new_weeks)} New Resort Listing(s) Found!"
 
     body_text = f"Global Discovery Vacations - New Inventory Alert\n"
     body_text += f"{'=' * 50}\n"
@@ -111,8 +121,8 @@ def send_email_notification(new_weeks):
         card_content = item.get("raw_text") or item.get("clean_title") or str(item)
         single_line_text = " ".join(card_content.splitlines()).strip()
         priority_tag = " [PRIORITY LOCATION MATCH]" if item.get("is_priority") else ""
-        
-        body_text += f"{idx}. {single_line_text}{priority_tag}\n"
+
+        body_text += f"{idx}. [{item.get('dates', '')}] {single_line_text}{priority_tag}\n"
         body_text += f"   --------------------------------------------------\n"
 
     body_text += "\nLog into GDV Member Portal to view details: https://globaldiscoveryvacations.com/members.aspx\n"
@@ -126,8 +136,10 @@ def send_email_notification(new_weeks):
         server.sendmail(EMAIL_SENDER, EMAIL_RECEIVER, msg.as_string())
         server.quit()
         logging.info("Formatted email notification sent successfully!")
+        return True
     except Exception as e:
         logging.error(f"Failed to send email: {e}")
+        return False
 
 
 def dismiss_modals(page):
@@ -146,7 +158,7 @@ def dismiss_modals(page):
 
 def select_month_and_search(page, target_month_str):
     condos_url = "https://globaldiscoveryvacations.com/condos/Condos.aspx"
-    
+
     try:
         logging.info(f"Navigating to condo portal for {target_month_str}...")
         page.goto(condos_url, wait_until="networkidle", timeout=30000)
@@ -161,7 +173,7 @@ def select_month_and_search(page, target_month_str):
             page.wait_for_timeout(1000)
 
             month_option = page.locator(f"a[id*='lbMonth']:has-text('{target_month_str}')").first
-            
+
             if month_option.count() > 0 and month_option.is_visible():
                 logging.info(f"Clicking lbMonth LinkButton for {target_month_str}...")
                 href = month_option.get_attribute("href")
@@ -181,6 +193,41 @@ def select_month_and_search(page, target_month_str):
 
     except Exception as e:
         logging.warning(f"Error during month selection for {target_month_str}: {e}")
+
+
+def log_pagination_debug(page):
+    """Log (once per run) what the paging controls look like, to find out why only 12 results are read."""
+    global _PAGINATION_DEBUG_DONE
+    if _PAGINATION_DEBUG_DONE:
+        return
+    _PAGINATION_DEBUG_DONE = True
+    try:
+        controls = page.evaluate(r"""
+            () => {
+                const out = [];
+                document.querySelectorAll('a, button, select, input[type=button], input[type=submit]').forEach(el => {
+                    const id = el.id || '';
+                    const txt = (el.innerText || el.value || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+                    const hay = (id + ' ' + txt).toLowerCase();
+                    if (/page|next|prev|more|show|result|\bof\b/.test(hay)) {
+                        out.push(el.tagName + ' | id=' + id + ' | ' + txt);
+                    }
+                });
+                return out.slice(0, 40);
+            }
+        """)
+        logging.info(f"PAGINATION DEBUG: {len(controls)} possible paging controls found:")
+        for c in controls:
+            logging.info(f"PAGINATION DEBUG:   {c}")
+        body = page.inner_text("body")
+        hits = re.findall(
+            r"[^\n]{0,40}\b\d+\s*(?:results?|resorts?|properties|listings?|items?)\b[^\n]{0,40}",
+            body, flags=re.I
+        )
+        for h in hits[:5]:
+            logging.info(f"PAGINATION DEBUG: count text: {h.strip()}")
+    except Exception as e:
+        logging.warning(f"Pagination debug failed: {e}")
 
 
 def extract_all_resort_cards(page, month_label):
@@ -244,6 +291,9 @@ def extract_all_resort_cards(page, month_label):
         else:
             break
 
+    if current_page == 1 and len(extracted_cards) >= 10:
+        log_pagination_debug(page)
+
     logging.info(f"Extracted total of {len(extracted_cards)} items across {current_page} page(s) for {month_label}.")
     return extracted_cards
 
@@ -257,14 +307,14 @@ def process_target_months(page):
         ("August, 2027", "late_2027_states"),
         ("September, 2027", "late_2027_states")
     ]
-    
+
     combined_items = []
-    
+
     for month_label, region_rule in target_months:
         try:
             select_month_and_search(page, month_label)
             month_items = extract_all_resort_cards(page, month_label)
-            
+
             logging.info(f"Extracted {len(month_items)} items for {month_label}. Applying location filters...")
 
             for item_text in month_items:
@@ -347,15 +397,16 @@ def run_gdv_scrape():
         filtered_items = process_target_months(page)
         logging.info(f"Successfully filtered to {len(filtered_items)} matching resort listings across all criteria.")
 
-        # 3. Deduplicate against seen weeks
+        # 3. Work out which listings are new (not marked as seen yet - that happens after the email is sent)
+        new_ids = set()
         for item in filtered_items:
-            item_text = item["text"]
-            item_id = item_text[:100]
-
-            if item_id not in seen_weeks:
-                seen_weeks.add(item_id)
+            item["id"] = make_item_id(item)
+            item["is_new"] = item["id"] not in seen_weeks
+            if item["is_new"] and item["id"] not in new_ids:
+                new_ids.add(item["id"])
                 new_weeks.append({
-                    "clean_title": item_text,
+                    "id": item["id"],
+                    "clean_title": item["text"],
                     "dates": item.get("target_month", TARGET_MONTH_LABEL),
                     "is_priority": item["is_priority"]
                 })
@@ -378,7 +429,7 @@ def run_gdv_scrape():
 
             # Filter out pure UI control lines
             candidate_lines = [
-                l for l in lines 
+                l for l in lines
                 if not any(junk == l.upper() or l.upper().startswith(junk) for junk in ui_junk)
             ]
 
@@ -403,12 +454,21 @@ def run_gdv_scrape():
             dates_match = re.search(r'\d{1,2}/\d{1,2}/\d{4}', item_text)
             exact_date = dates_match.group(0) if dates_match else item.get("target_month", "N/A")
 
-            item_id = item_text[:100]
-            is_new = "NEW" if item_id not in seen_weeks else "ALREADY SEEN"
+            is_new = "NEW" if item.get("is_new") else "already seen"
 
             logging.info(f"  {idx}. [{is_new}] {resort_title} | Location: {location} | Month: {exact_date}")
         logging.info("-----------------------------------")
-    
+
+    # 5. Send the email, and only then remember what has been reported
+    if new_weeks:
+        logging.info(f"{len(new_weeks)} new listing(s) found. Sending email...")
+        if send_email_notification(new_weeks):
+            seen_weeks.update(w["id"] for w in new_weeks)
+            save_seen_weeks(seen_weeks)
+        else:
+            logging.error("Email was not sent, so these listings are NOT marked as seen and will be retried next run.")
+    else:
+        logging.info("No new GDV listings this run.")
 
 
 if __name__ == "__main__":
