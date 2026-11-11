@@ -61,6 +61,16 @@ LATE_2027_STATES_PATTERNS = [
     r"\bnorth carolina\b", r"\bnc\b"
 ]
 
+# Destination entries (from the portal's Destination dropdown) to check, by month type.
+# Entries only appear on the site when they have inventory, so names are matched by pattern.
+FL_REGION_PATTERNS = [r"^florida\b(?!.*orlando)", r"keys"]
+LATE_REGION_PATTERNS = [
+    r"^north carolina", r"^tennessee", r"^virginia", r"^michigan",
+    r"^florida\s*-\s*(southwest|southeast)", r"keys",
+]
+NON_PAGE_LINK_IDS = ["Checkin", "Bedroom", "Distance", "Amenity", "Destination", "lbVES",
+                     "lbMonth", "lbFilter", "PageSize", "lbSort", "lbDest"]
+
 _PAGINATION_DEBUG_DONE = False
 _CARD_SAMPLE_LOGGED = [False]
 
@@ -298,21 +308,83 @@ def log_pagination_debug(page):
         logging.warning(f"Pagination debug failed: {e}")
 
 
-def extract_all_resort_cards(page, month_label):
+def list_destinations(page):
+    """Read the Destination dropdown: returns [{'id','name','count'}] for entries that currently have inventory."""
+    out = []
+    try:
+        links = page.locator("a[id*='rpDestination'][id*='lbDest']")
+        for i in range(links.count()):
+            el = links.nth(i)
+            raw = " ".join((el.text_content() or "").split())
+            m = re.match(r"^(.*?)\s+(\d+)\b", raw)
+            out.append({
+                "id": el.get_attribute("id"),
+                "name": (m.group(1) if m else raw).strip(),
+                "count": int(m.group(2)) if m else None,
+            })
+    except Exception as e:
+        logging.warning(f"Could not read the Destination list: {e}")
+    return out
+
+
+def pick_targets(options, region_rule):
+    patterns = FL_REGION_PATTERNS if region_rule == "fl_only" else LATE_REGION_PATTERNS
+    return [o for o in options if any(re.search(pat, o["name"].lower()) for pat in patterns)]
+
+
+def click_destination(page, dest):
+    link = page.locator(f"[id='{dest['id']}']").first
+    href = link.get_attribute("href")
+    if href and href.startswith("javascript:"):
+        page.evaluate(href.replace("javascript:", ""))
+    else:
+        link.click(force=True)
+    page.wait_for_load_state("networkidle")
+    page.wait_for_timeout(3000)
+    dismiss_modals(page)
+
+
+def go_to_page(page, n):
+    """Click the page-number link for page n at the bottom of the results. Returns False if there isn't one."""
+    try:
+        cands = page.locator("a").filter(has_text=re.compile(rf"^\s*{n}\s*$"))
+        for i in range(cands.count()):
+            el = cands.nth(i)
+            aid = el.get_attribute("id") or ""
+            if any(bad in aid for bad in NON_PAGE_LINK_IDS):
+                continue
+            href = el.get_attribute("href")
+            if href and href.startswith("javascript:"):
+                page.evaluate(href.replace("javascript:", ""))
+            elif el.is_visible():
+                el.click(force=True)
+            else:
+                continue
+            page.wait_for_load_state("networkidle")
+            page.wait_for_timeout(2500)
+            return True
+    except Exception as e:
+        logging.warning(f"Paging to page {n} failed: {e}")
+    return False
+
+
+def extract_all_resort_cards(page, label):
     extracted_cards = []
     current_page = 1
+    prev_first = None
 
-    while True:
-        logging.info(f"Extracting resort cards from Page {current_page} for {month_label}...")
+    while current_page <= 30:
+        logging.info(f"Extracting resort cards from Page {current_page} for {label}...")
         page.wait_for_timeout(1500)
 
         cards = page.locator("article.items")
         card_count = cards.count()
 
         if card_count == 0:
-            logging.warning(f"No card elements found on Page {current_page} for {month_label}.")
+            logging.warning(f"No card elements found on Page {current_page} for {label}.")
             break
 
+        page_cards = []
         for i in range(card_count):
             try:
                 raw_text = cards.nth(i).inner_text().strip()
@@ -327,56 +399,53 @@ def extract_all_resort_cards(page, month_label):
                 clean_card_text = "\n".join(cleaned_lines)
 
                 if clean_card_text and len(clean_card_text) > 20:
-                    if not _CARD_SAMPLE_LOGGED[0]:
-                        _CARD_SAMPLE_LOGGED[0] = True
-                        logging.info("CARD SAMPLE: " + " | ".join(cleaned_lines)[:500])
-                    extracted_cards.append(clean_card_text)
+                    page_cards.append(clean_card_text)
 
             except Exception as card_err:
                 logging.warning(f"Error parsing card {i} on page {current_page}: {card_err}")
 
-        # Check for GDV pagination buttons
-        next_page_num = current_page + 1
-        next_button = page.locator(
-            f"a[id*='Next'], a[id*='lnkNext'], a[id*='lbNext'], "
-            f"a[id*='lbPage']:has-text('{next_page_num}'), "
-            f".pagination a:has-text('{next_page_num}'), .pagination a:has-text('Next'), .pagination a:has-text('>')"
-        ).first
+        if page_cards and page_cards[0] == prev_first:
+            break  # the page did not change; stop instead of reading the same cards again
+        prev_first = page_cards[0] if page_cards else None
+        extracted_cards.extend(page_cards)
 
-        if next_button.count() > 0 and next_button.is_visible():
-            is_disabled = next_button.get_attribute("disabled") or "disabled" in (next_button.get_attribute("class") or "")
-            if is_disabled:
-                break
-
-            current_page += 1
-            logging.info(f"Navigating to Page {current_page} for {month_label}...")
-
-            href = next_button.get_attribute("href")
-            if href and href.startswith("javascript:"):
-                page.evaluate(href.replace("javascript:", ""))
-            else:
-                next_button.click(force=True)
-
-            page.wait_for_load_state("networkidle")
-            page.wait_for_timeout(2500)
-        else:
+        # Only look for another page when this one is full
+        if card_count < 12:
+            break  # not even a default-size page, so there can't be another
+        if not go_to_page(page, current_page + 1):
+            if card_count >= 48:
+                logging.warning(f"{label}: a full page of {card_count} but no page {current_page + 1} link found; results may be cut off.")
             break
+        current_page += 1
 
-    if month_label.startswith("September"):
-        logging.info(f"ALL CARDS DEBUG for {month_label}: {len(extracted_cards)} cards")
-        for n, c in enumerate(extracted_cards, 1):
-            flat = " | ".join(l for l in c.splitlines() if l.strip())
-            m = re.search(r"Check-In:\s*\S+\s+(\d{1,2}/\d{1,2}/\d{2,4})", flat)
-            loc = re.search(r"\|\s*([^|]*(?:,\s*[A-Z]{2}|\b[A-Z]{2}\s+USA)[^|]*)\|", flat)
-            logging.info(f"ALL CARDS DEBUG {n}: {(loc.group(1).strip() if loc else flat[:60])} | in {m.group(1) if m else '?'}")
-        log_all_controls(page)
-
-    if current_page == 1 and len(extracted_cards) >= 48:
-        logging.warning(f"Got {len(extracted_cards)} items on one page for {month_label}; results may be cut off.")
-        log_pagination_debug(page)
-
-    logging.info(f"Extracted total of {len(extracted_cards)} items across {current_page} page(s) for {month_label}.")
+    logging.info(f"Extracted total of {len(extracted_cards)} items across {current_page} page(s) for {label}.")
     return extracted_cards
+
+
+def apply_location_filters(month_items, region_rule, month_label, combined_items):
+    for item_text in month_items:
+        # 1. Block international listings
+        if not is_us_location(item_text):
+            continue
+
+        # 1b. Block the Orlando / Disney area
+        if is_excluded_area(item_text):
+            continue
+
+        has_priority_loc = is_priority_location(item_text)
+
+        # 2. Priority locations bypass standard state limits
+        if has_priority_loc:
+            combined_items.append({"text": item_text, "is_priority": True, "target_month": month_label})
+            continue
+
+        # 3. Apply state restrictions based on target month rules
+        if region_rule == "fl_only":
+            if matches_patterns(item_text, FLORIDA_PATTERNS):
+                combined_items.append({"text": item_text, "is_priority": False, "target_month": month_label})
+        elif region_rule == "late_2027_states":
+            if matches_patterns(item_text, LATE_2027_STATES_PATTERNS):
+                combined_items.append({"text": item_text, "is_priority": False, "target_month": month_label})
 
 
 def process_target_months(page):
@@ -394,33 +463,31 @@ def process_target_months(page):
     for month_label, region_rule in target_months:
         try:
             select_month_and_search(page, month_label)
-            month_items = extract_all_resort_cards(page, month_label)
+            options = list_destinations(page)
 
-            logging.info(f"Extracted {len(month_items)} items for {month_label}. Applying location filters...")
+            if not options:
+                logging.warning(f"{month_label}: no Destination list found; reading the unfiltered results instead.")
+                month_items = extract_all_resort_cards(page, month_label)
+                apply_location_filters(month_items, region_rule, month_label, combined_items)
+                continue
 
-            for item_text in month_items:
-                # 1. Block international listings
-                if not is_us_location(item_text):
-                    continue
+            logging.info(f"DESTINATIONS {month_label}: " + ", ".join(f"{o['name']} ({o['count']})" for o in options))
+            targets = pick_targets(options, region_rule)
+            logging.info(f"{month_label}: checking {len(targets)} region(s): " + (", ".join(t['name'] for t in targets) or "none available"))
 
-                # 1b. Block the Orlando / Disney area
-                if is_excluded_area(item_text):
-                    continue
-
-                has_priority_loc = is_priority_location(item_text)
-
-                # 2. Priority locations bypass standard state limits
-                if has_priority_loc:
-                    combined_items.append({"text": item_text, "is_priority": True, "target_month": month_label})
-                    continue
-
-                # 3. Apply state restrictions based on target month rules
-                if region_rule == "fl_only":
-                    if matches_patterns(item_text, FLORIDA_PATTERNS):
-                        combined_items.append({"text": item_text, "is_priority": False, "target_month": month_label})
-                elif region_rule == "late_2027_states":
-                    if matches_patterns(item_text, LATE_2027_STATES_PATTERNS):
-                        combined_items.append({"text": item_text, "is_priority": False, "target_month": month_label})
+            for n, dest in enumerate(targets):
+                try:
+                    if n > 0:
+                        select_month_and_search(page, month_label)  # fresh page, month selected again
+                    click_destination(page, dest)
+                    if page.locator("article.items").count() == 12:
+                        set_page_size(page)
+                    label = f"{month_label} / {dest['name']}"
+                    region_items = extract_all_resort_cards(page, label)
+                    logging.info(f"{label}: {len(region_items)} listing(s) read (site shows {dest['count']}).")
+                    apply_location_filters(region_items, region_rule, month_label, combined_items)
+                except Exception as e:
+                    logging.error(f"Error checking {dest['name']} for {month_label}: {e}")
 
         except Exception as e:
             logging.error(f"Error executing extraction for {month_label}: {e}")
