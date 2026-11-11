@@ -55,6 +55,7 @@ LATE_2027_STATES_PATTERNS = [
 ]
 
 _PAGINATION_DEBUG_DONE = False
+_CARD_SAMPLE_LOGGED = [False]
 
 
 def load_seen_weeks():
@@ -190,9 +191,37 @@ def select_month_and_search(page, target_month_str):
             logging.warning("Month dropdown button was not visible on page.")
 
         dismiss_modals(page)
+        set_page_size(page)
 
     except Exception as e:
         logging.warning(f"Error during month selection for {target_month_str}: {e}")
+
+
+def set_page_size(page, size=48):
+    """The portal shows 12 results per page by default. Switch to the largest page size so nothing is cut off."""
+    try:
+        link = page.locator(f"a[id*='lbPageSize{size}']").first
+        if link.count() == 0:
+            logging.warning(f"'{size} per page' link not found; only the first 12 results will be read.")
+            return
+
+        href = link.get_attribute("href")
+        if href and href.startswith("javascript:"):
+            page.evaluate(href.replace("javascript:", ""))
+        else:
+            if not link.is_visible():
+                toggle = page.locator("a:has-text('SHOW'), .dropdown-toggle:has-text('SHOW')").first
+                if toggle.count() > 0:
+                    toggle.click()
+                    page.wait_for_timeout(1000)
+            link.click(force=True)
+
+        page.wait_for_load_state("networkidle")
+        page.wait_for_timeout(3000)
+        dismiss_modals(page)
+        logging.info(f"Set results to {size} per page.")
+    except Exception as e:
+        logging.warning(f"Could not change page size: {e}")
 
 
 def log_pagination_debug(page):
@@ -259,6 +288,9 @@ def extract_all_resort_cards(page, month_label):
                 clean_card_text = "\n".join(cleaned_lines)
 
                 if clean_card_text and len(clean_card_text) > 20:
+                    if not _CARD_SAMPLE_LOGGED[0]:
+                        _CARD_SAMPLE_LOGGED[0] = True
+                        logging.info("CARD SAMPLE: " + " | ".join(cleaned_lines)[:500])
                     extracted_cards.append(clean_card_text)
 
             except Exception as card_err:
@@ -291,7 +323,8 @@ def extract_all_resort_cards(page, month_label):
         else:
             break
 
-    if current_page == 1 and len(extracted_cards) >= 10:
+    if current_page == 1 and len(extracted_cards) >= 48:
+        logging.warning(f"Got {len(extracted_cards)} items on one page for {month_label}; results may be cut off.")
         log_pagination_debug(page)
 
     logging.info(f"Extracted total of {len(extracted_cards)} items across {current_page} page(s) for {month_label}.")
