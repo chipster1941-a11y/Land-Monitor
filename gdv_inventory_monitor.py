@@ -45,6 +45,13 @@ NON_US_KEYWORDS = [
     "st. maarten", "costa rica", "belize", "canada", "barbados"
 ]
 
+# Areas to ignore completely (Orlando / Disney area). Matched as whole words anywhere in the listing text.
+EXCLUDED_AREAS = [
+    "orlando", "kissimmee", "celebration", "lake buena vista", "windermere", "davenport",
+    "st. cloud", "saint cloud", "clermont", "champions gate", "championsgate", "four corners",
+    "reunion", "winter garden", "orange lake", "bay lake", "disney",
+]
+
 # Regional location matchers
 FLORIDA_PATTERNS = [r"\bflorida\b", r"\bfl\b"]
 LATE_2027_STATES_PATTERNS = [
@@ -90,6 +97,11 @@ def make_item_id(item):
 def is_priority_location(text):
     lower_text = text.lower()
     return any(loc in lower_text for loc in PRIORITY_LOCATIONS)
+
+
+def is_excluded_area(text):
+    lower_text = text.lower()
+    return any(re.search(r"\b" + re.escape(area) + r"\b", lower_text) for area in EXCLUDED_AREAS)
 
 
 def is_us_location(text):
@@ -224,6 +236,33 @@ def set_page_size(page, size=48):
         logging.warning(f"Could not change page size: {e}")
 
 
+def log_all_controls(page):
+    """List every link/button/dropdown on the page with its id, to find filters, sorting and paging."""
+    try:
+        items = page.evaluate(r"""
+            () => {
+                const out = [];
+                document.querySelectorAll('a[id], button, select, input[type=checkbox], input[type=radio]').forEach(el => {
+                    const id = el.id || '';
+                    if (!id && el.tagName === 'A') return;
+                    const txt = (el.innerText || el.value || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+                    out.push(el.tagName + ' | ' + id.replace('ctl00_cphMemberBody_', '') + ' | ' + txt);
+                });
+                return out.slice(0, 120);
+            }
+        """)
+        logging.info(f"CONTROLS DEBUG: {len(items)} controls")
+        for it in items:
+            logging.info(f"CONTROLS DEBUG: {it}")
+        body = page.inner_text("body")
+        logging.info("PAGE BOTTOM DEBUG: " + " / ".join(body.strip().splitlines()[-25:])[:700])
+        top = re.findall(r"[^\n]{0,60}\b\d+\b[^\n]{0,40}(?:of|found|total|results?)[^\n]{0,40}", body, flags=re.I)
+        for t in top[:5]:
+            logging.info(f"COUNT TEXT DEBUG: {t.strip()}")
+    except Exception as e:
+        logging.warning(f"Controls debug failed: {e}")
+
+
 def log_pagination_debug(page):
     """Log (once per run) what the paging controls look like, to find out why only 12 results are read."""
     global _PAGINATION_DEBUG_DONE
@@ -323,6 +362,15 @@ def extract_all_resort_cards(page, month_label):
         else:
             break
 
+    if month_label.startswith("September"):
+        logging.info(f"ALL CARDS DEBUG for {month_label}: {len(extracted_cards)} cards")
+        for n, c in enumerate(extracted_cards, 1):
+            flat = " | ".join(l for l in c.splitlines() if l.strip())
+            m = re.search(r"Check-In:\s*\S+\s+(\d{1,2}/\d{1,2}/\d{2,4})", flat)
+            loc = re.search(r"\|\s*([^|]*(?:,\s*[A-Z]{2}|\b[A-Z]{2}\s+USA)[^|]*)\|", flat)
+            logging.info(f"ALL CARDS DEBUG {n}: {(loc.group(1).strip() if loc else flat[:60])} | in {m.group(1) if m else '?'}")
+        log_all_controls(page)
+
     if current_page == 1 and len(extracted_cards) >= 48:
         logging.warning(f"Got {len(extracted_cards)} items on one page for {month_label}; results may be cut off.")
         log_pagination_debug(page)
@@ -353,6 +401,10 @@ def process_target_months(page):
             for item_text in month_items:
                 # 1. Block international listings
                 if not is_us_location(item_text):
+                    continue
+
+                # 1b. Block the Orlando / Disney area
+                if is_excluded_area(item_text):
                     continue
 
                 has_priority_loc = is_priority_location(item_text)
